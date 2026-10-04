@@ -1,511 +1,306 @@
-# ✨ Velora — Real-Time Chat & Social Communication Platform
+# ✦ Velora
+
+### **Conversations, in real time.**
+
+A full-stack real-time communication platform: instant messaging, group chats, voice and video calls, disappearing Status updates, and shared Moments. It runs in the browser on desktop, tablet and mobile.
 
 <p align="center">
-  <strong>Conversations, in real time.</strong>
-</p>
-
-<p align="center">
-  A modern full-stack communication platform built for fast, interactive and responsive messaging across desktop and mobile devices.
-</p>
-
-<p align="center">
-  <img src="https://img.shields.io/badge/React-18-61DAFB?style=for-the-badge&logo=react&logoColor=white" />
-  <img src="https://img.shields.io/badge/Node.js-18+-339933?style=for-the-badge&logo=node.js&logoColor=white" />
-  <img src="https://img.shields.io/badge/Express.js-4-000000?style=for-the-badge&logo=express&logoColor=white" />
-  <img src="https://img.shields.io/badge/Socket.IO-4-010101?style=for-the-badge&logo=socket.io&logoColor=white" />
-  <img src="https://img.shields.io/badge/MongoDB-8-47A248?style=for-the-badge&logo=mongodb&logoColor=white" />
-  <img src="https://img.shields.io/badge/Tailwind_CSS-3-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white" />
+  <img src="https://img.shields.io/badge/React-18-61DAFB?style=for-the-badge&logo=react&logoColor=white" alt="React 18" />
+  <img src="https://img.shields.io/badge/Vite-5-646CFF?style=for-the-badge&logo=vite&logoColor=white" alt="Vite 5" />
+  <img src="https://img.shields.io/badge/Node.js-18+-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node.js 18+" />
+  <img src="https://img.shields.io/badge/Express-4-000000?style=for-the-badge&logo=express&logoColor=white" alt="Express 4" />
+  <img src="https://img.shields.io/badge/Socket.IO-4-010101?style=for-the-badge&logo=socket.io&logoColor=white" alt="Socket.IO 4" />
+  <img src="https://img.shields.io/badge/MongoDB-Mongoose_8-47A248?style=for-the-badge&logo=mongodb&logoColor=white" alt="MongoDB" />
+  <img src="https://img.shields.io/badge/Tailwind_CSS-3-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white" alt="Tailwind CSS 3" />
+  <img src="https://img.shields.io/badge/WebRTC-calls-333333?style=for-the-badge&logo=webrtc&logoColor=white" alt="WebRTC" />
 </p>
 
 ---
 
-## 🌌 About Velora
+## ✨ Overview
 
-**Velora** is a full-stack real-time chat and social communication platform designed to provide a smooth and engaging messaging experience.
+Velora combines a React single-page app with a Node.js/Express API, MongoDB for persistence and Socket.IO for real-time events. Audio and video calls run peer-to-peer over WebRTC.
 
-It combines a modern **React frontend** with a **Node.js + Express backend**, **MongoDB** for persistent data, and **Socket.IO** for real-time communication.
+### Main areas
 
-The platform supports private conversations, group chats, media sharing, voice messages, message reactions, profile management, privacy controls, browser notifications and multiple visual themes.
-
-> **Built as a complete runnable application — not just a UI mockup.**
-
----
-
-## 🚀 Highlights
-
-| 💬 Real-Time Messaging           | 👥 Group Conversations           |
-| -------------------------------- | -------------------------------- |
-| Instant messaging with Socket.IO | Create groups and manage members |
-| Sent / delivered / seen states   | Admin & member controls          |
-| Typing indicators                | Group descriptions & avatars     |
-| Replies & reactions              | Add / remove members             |
-
-| 📎 Media Sharing             | 🎨 Personalization          |
-| ---------------------------- | --------------------------- |
-| Images & files               | 4 animated dark themes      |
-| Voice messages               | Custom chat wallpapers      |
-| Drag & drop uploads          | Responsive mobile interface |
-| Shared media / files / links | Smooth UI animations        |
+| Area          | What it does                                                              |
+| ------------- | ------------------------------------------------------------------------- |
+| 💬 **Chats**  | 1:1 and group messaging with replies, reactions, media and voice messages |
+| 🟣 **Status** | Text, photo or video updates that disappear after 24 hours                |
+| ✨ **Moments** | Shared collections of photos, videos and written memories                 |
+| 📞 **Calls**  | One-to-one voice and video calls with call history                        |
 
 ---
 
-## ✨ Features
+# 🚀 Features
 
 ### 💬 Messaging
 
-* Real-time 1-to-1 messaging
-* Real-time group messaging
-* Sent, delivered and seen message states
-* Typing indicators
-* Online / offline presence
-* Last-seen information
-* Message replies with quoted previews
-* Edit sent text messages
-* Delete messages for yourself or everyone
+* Real-time 1:1 and group chat
+* Sent, delivered and seen states
+* Typing indicators and online/offline presence
+* Replies, editing and message deletion
 * Emoji reactions
-* Message information
-* Unread message counters
-* Unread separator
-* New-message jump button
-* In-conversation message search
-* Pin / unpin messages
-* Pinned messages section
+* Message search and pinning
+* Unread counters
+* Browser notifications
 
-### 👥 Chat & Contact Management
+### 👥 Chat & Groups
 
-* Create private conversations
-* Create group conversations
-* Add / remove group members
-* Promote / demote group admins
-* Leave groups
-* Pin chats
-* Archive chats
-* Mute conversations
-* Clear chat history for the current user
-* Block / unblock users
-* Custom wallpaper for individual conversations
-
-### 📎 Media & File Sharing
-
-* Image sharing with preview before sending
-* File sharing
-* PDF, Office, ZIP and text file support
-* Drag & drop file uploads on desktop
-* Voice message recording
-* Voice message playback
-* Recording timer
-* Cancel recording
-* Shared Media / Files / Links sections
-
-### 👤 Profile & Privacy
-
-* Editable profile name
-* Username
-* Bio
-* Profile picture
-* Custom status message
-* Last-seen privacy
-* Online-status privacy
-* Profile-picture privacy
-* Messaging privacy
-* Blocked users management
-
-### 🔔 Notifications
-
-Velora uses the browser's Notification API to provide message notifications while respecting:
-
-* Conversation mute settings
-* Blocked users
-* Current active conversation
-* Browser permissions
-
-### 🎨 Themes & UI
-
-Velora includes four premium dark themes:
-
-* 🌋 **Nebula Ember**
-* 🌸 **Sakura Dream**
-* 🌊 **Ocean Pulse**
-* 🌌 **Midnight Aurora**
-
-The application also includes:
-
-* Responsive desktop / tablet / mobile UI
-* Mobile single-pane navigation
-* Mobile-friendly emoji picker
-* Safe-area support
-* Smooth Framer Motion animations
+* Private chats and groups
+* Group admins and member management
+* Pin, archive and mute chats
 * Custom chat wallpapers
-* Code-split emoji picker loading
+* Block and unblock users
+
+### 🖼️ Media & Files
+
+* Image, video and file sharing
+* Image previews and lightbox
+* Drag & drop and clipboard paste
+* Voice messages with recording controls
+
+### 🟣 Status
+
+* Text, photo and video updates
+* Audience controls
+* Automatic 24-hour expiry
+* Status viewer and replies
+
+### ✨ Moments
+
+* Create and share Moments
+* Add photos, videos and written memories
+* Custom cover photos
+* Share Moments into chats
+
+### 📞 Voice & Video Calls
+
+* One-to-one voice and video calls
+* Mute and camera controls
+* Front/back camera switching
+* Minimize calls while chatting
+* Call history and missed calls
+* WebRTC with optional TURN support
+
+### 🎨 Profile & Appearance
+
+* Editable profile, bio and avatar
+* Privacy controls
+* Blocked users list
+* Four dark themes:
+
+  * **Nebula Ember**
+  * **Sakura Dream**
+  * **Ocean Pulse**
+  * **Midnight Aurora**
+
+### 📱 Responsive Design
+
+* Desktop, tablet and mobile support
+* Mobile-friendly navigation
+* Safe-area support
+* Responsive emoji picker
 
 ---
 
-## 🛠️ Tech Stack
+# 🛠️ Tech Stack
 
-### Frontend
+**Frontend**
 
-* React 18
-* Vite
-* Tailwind CSS
-* Framer Motion
-* Lucide React
-* Axios
-* Socket.IO Client
-* React Router
+React 18 · Vite 5 · Tailwind CSS 3 · Framer Motion · React Router · Axios · Socket.IO Client
 
-### Backend
+**Backend**
 
-* Node.js
-* Express.js
-* Socket.IO
-* Mongoose
-* JWT Authentication
-* bcryptjs
-* Multer
+Node.js · Express 4 · Socket.IO 4 · Mongoose 8 · JWT · bcryptjs · Multer
 
-### Database & Storage
+**Database & Storage**
 
-* MongoDB
-* MongoDB Atlas
-* Local file storage
-* Optional Cloudinary integration
+MongoDB · MongoDB Atlas · Cloudinary
+
+**Real-time Communication**
+
+Socket.IO · WebRTC · STUN / TURN
 
 ---
 
-## 🏗️ Architecture
+# 🏗️ Architecture
 
 ```text
-                    ┌─────────────────────┐
-                    │       User          │
-                    │ Desktop / Mobile    │
-                    └──────────┬──────────┘
-                               │
-                               ▼
-                    ┌─────────────────────┐
-                    │   React Frontend    │
-                    │ Vite + Tailwind CSS │
-                    └──────────┬──────────┘
-                               │
-                 ┌─────────────┴─────────────┐
-                 │                           │
-                 ▼                           ▼
-        ┌────────────────┐          ┌────────────────┐
-        │   REST API     │          │   Socket.IO    │
-        │ Axios / JWT    │          │ Real-time Data │
-        └───────┬────────┘          └────────┬───────┘
-                │                            │
-                └─────────────┬──────────────┘
-                              ▼
-                    ┌─────────────────────┐
-                    │ Node + Express      │
-                    │ Application Server  │
-                    └──────────┬──────────┘
-                               │
-                               ▼
-                    ┌─────────────────────┐
-                    │      MongoDB         │
-                    │ Persistent Storage   │
-                    └─────────────────────┘
+        ┌─────────────────────┐
+        │    React + Vite     │
+        │ Chats · Status      │
+        │ Moments · Calls     │
+        └──────────┬──────────┘
+                   │
+             REST + Socket.IO
+                   │
+        ┌──────────▼──────────┐
+        │  Node.js + Express  │
+        │     Socket.IO       │
+        └──────────┬──────────┘
+                   │
+              ┌────▼────┐
+              │ MongoDB │
+              └─────────┘
+
+       Voice / Video → WebRTC
+       Media Storage → Cloudinary
 ```
 
 ---
 
-## 📁 Project Structure
+# 📁 Project Structure
 
 ```text
 velora/
-│
-├── client/
+├── client/                 # React frontend
 │   ├── src/
-│   │   ├── components/
 │   │   ├── pages/
+│   │   ├── components/
 │   │   ├── context/
 │   │   ├── hooks/
-│   │   └── services/
-│   │
-│   └── package.json
+│   │   ├── services/
+│   │   └── utils/
 │
-├── server/
-│   ├── src/
-│   │   ├── config/
-│   │   ├── models/
-│   │   ├── controllers/
-│   │   ├── routes/
-│   │   ├── middleware/
-│   │   └── socket/
-│   │
-│   ├── .env.example
-│   └── package.json
+├── server/                 # Express + Socket.IO backend
+│   └── src/
+│       ├── config/
+│       ├── models/
+│       ├── controllers/
+│       ├── routes/
+│       ├── middleware/
+│       ├── socket/
+│       └── utils/
 │
-├── .gitignore
-├── .env.example
-└── package.json
+├── package.json
+└── .env.example
 ```
 
 ---
 
-## ⚙️ Getting Started
+# ⚡ Getting Started
 
 ### Prerequisites
 
-Make sure you have:
+* Node.js 18 or later
+* MongoDB local instance or MongoDB Atlas
+* Modern browser
+* Optional: Cloudinary account
 
-* **Node.js 18+**
-* **MongoDB / MongoDB Atlas**
-* Git
-* A modern web browser
-
-Cloudinary is optional for cloud-based media storage.
-
-### 1. Clone the repository
+### 1. Clone
 
 ```bash
 git clone https://github.com/Saumya-Mishraa/velora-real-time-chat.git
-
 cd velora-real-time-chat
 ```
 
-### 2. Install dependencies
+### 2. Install
 
 ```bash
 npm install
 npm run install:all
 ```
 
-### 3. Configure environment variables
+### 3. Configure
 
-Create:
-
-```text
-server/.env
-```
-
-Add your environment configuration:
+Create `server/.env`:
 
 ```env
-PORT=5000
-NODE_ENV=development
-
 MONGO_URI=your_mongodb_connection_string
-
 JWT_SECRET=your_secret_key
-JWT_EXPIRES_IN=7d
-
 CLIENT_URL=http://localhost:5173
-
-USE_CLOUDINARY=false
 ```
 
-If using Cloudinary:
-
-```env
-USE_CLOUDINARY=true
-CLOUDINARY_CLOUD_NAME=your_cloud_name
-CLOUDINARY_API_KEY=your_api_key
-CLOUDINARY_API_SECRET=your_api_secret
-```
-
-> ⚠️ Never commit your `.env` file or real API credentials to GitHub.
-
-### 4. Start the application
-
-From the project root:
+### 4. Run
 
 ```bash
 npm run dev
 ```
 
-This starts:
-
-```text
-Frontend → http://localhost:5173
-Backend  → http://localhost:5000
-```
-
-Backend health check:
-
-```text
-http://localhost:5000/api/health
-```
+| Service      | URL                                |
+| ------------ | ---------------------------------- |
+| Frontend     | `http://localhost:5173`            |
+| Backend      | `http://localhost:5000`            |
+| Health Check | `http://localhost:5000/api/health` |
 
 ---
 
-## 🧪 Testing
+# 📜 Scripts
 
-Velora's backend source files can be syntax-checked and the frontend can be production-built using Vite.
-
-For a complete manual test, use two separate accounts/browser windows and verify:
-
-* Real-time message delivery
-* Delivered / seen states
-* Typing indicators
-* Online / offline presence
-* Message replies
-* Editing and deletion
-* Emoji reactions
-* Voice messages
-* Image uploads
-* File sharing
-* Group management
-* Chat pinning / archiving / muting
-* User blocking
-* Search
-* Responsive mobile layouts
+| Command               | Purpose                  |
+| --------------------- | ------------------------ |
+| `npm run dev`         | Run frontend and backend |
+| `npm run server`      | Run backend              |
+| `npm run client`      | Run frontend             |
+| `npm run build`       | Build frontend           |
+| `npm run install:all` | Install all dependencies |
 
 ---
 
-## 🔐 Security
+# ☁️ Deployment
 
-Velora implements several server-side security mechanisms:
+Velora can be deployed using:
 
-* Password hashing using bcrypt
-* JWT-based authentication
-* Protected API routes
-* Server-side conversation membership checks
-* Admin authorization for group actions
-* Server-enforced user blocking
-* Upload type and size restrictions
-* Environment variables for secrets
-* `.env` excluded through `.gitignore`
+| Part     | Platform         |
+| -------- | ---------------- |
+| Frontend | Vercel / Netlify |
+| Backend  | Render / Railway |
+| Database | MongoDB Atlas    |
+| Media    | Cloudinary       |
 
----
-
-## 📱 Responsive Design
-
-Velora is designed to work across:
-
-```text
-Desktop
-   ↓
-Tablet
-   ↓
-Mobile
-```
-
-The mobile experience includes:
-
-* Single-pane chat navigation
-* Responsive message composer
-* Mobile-friendly emoji picker
-* Safe-area support
-* Responsive modals
-* No intentional horizontal overflow
-* Touch-friendly controls
+> For production deployments, Cloudinary is recommended for persistent media storage.
 
 ---
 
-## ☁️ Deployment
+# 📊 Feature Status
 
-A recommended production architecture is:
-
-```text
-Frontend
-   │
-   └── Vercel / Netlify
-
-Backend
-   │
-   └── Render / Railway
-
-Database
-   │
-   └── MongoDB Atlas
-
-Media Storage
-   │
-   └── Cloudinary
-```
-
-For production deployments, configure the appropriate environment variables on the hosting platform rather than committing them to the repository.
+| Feature              | Status     |
+| -------------------- | ---------- |
+| Registration & Login | ✅          |
+| Private & Group Chat | ✅          |
+| Real-time Messaging  | ✅          |
+| Typing & Presence    | ✅          |
+| Replies & Reactions  | ✅          |
+| Media & File Sharing | ✅          |
+| Voice Messages       | ✅          |
+| Voice & Video Calls  | ✅          |
+| Status               | ✅          |
+| Moments              | ✅          |
+| Profile & Privacy    | ✅          |
+| Responsive Layout    | ✅          |
+| Multiple Dark Themes | ✅          |
+| Cloudinary Storage   | ✅ Optional |
+| Group Calls          | ❌          |
+| Light Mode           | ❌          |
+| Automated Tests      | ❌          |
 
 ---
 
-## 📊 Feature Checklist
+# 🛣️ Roadmap
 
-| Feature                   |   Status   |
-| ------------------------- | :--------: |
-| User Registration / Login |      ✅     |
-| JWT Authentication        |      ✅     |
-| Private Chat              |      ✅     |
-| Group Chat                |      ✅     |
-| Real-Time Messaging       |      ✅     |
-| Sent / Delivered / Seen   |      ✅     |
-| Typing Indicators         |      ✅     |
-| Online / Offline Presence |      ✅     |
-| Message Replies           |      ✅     |
-| Message Editing           |      ✅     |
-| Delete for Me / Everyone  |      ✅     |
-| Emoji Reactions           |      ✅     |
-| Message Search            |      ✅     |
-| Message Pinning           |      ✅     |
-| Image Sharing             |      ✅     |
-| File Sharing              |      ✅     |
-| Voice Messages            |      ✅     |
-| Chat Pin / Archive / Mute |      ✅     |
-| Custom Wallpapers         |      ✅     |
-| User Blocking             |      ✅     |
-| Profile Management        |      ✅     |
-| Privacy Controls          |      ✅     |
-| Browser Notifications     |      ✅     |
-| Responsive UI             |      ✅     |
-| Animated Dark Themes      |      ✅     |
-| Cloudinary Support        | ✅ Optional |
-| Light Mode                |      ⏳     |
-| Voice / Video Calling     |      ⏳     |
+* Real email-based password recovery
+* Stronger REST security checks
+* Rate limiting and login throttling
+* Redis support for Socket.IO scaling
+* Automated tests
+* Light theme
+* Group calls
+* Infinite scroll for older messages
 
 ---
 
-## 🔮 Future Scope
-
-Possible future improvements include:
-
-* 📞 Voice and video calling
-* 🌤️ Light theme
-* 📧 Real email-based password recovery
-* 🔔 Advanced notification preferences
-* 🔒 Additional security hardening
-* ☁️ Improved production media infrastructure
-* 📈 Advanced analytics and usage insights
-* 🧑‍🤝‍🧑 Larger-scale group communication support
-
----
-
-## 🎯 Project Goals
-
-Velora was developed with the following goals:
-
-1. Build a real-world full-stack communication application.
-2. Implement real-time communication using WebSockets.
-3. Provide a responsive experience across devices.
-4. Practice secure authentication and authorization.
-5. Work with persistent NoSQL data using MongoDB.
-6. Build reusable and maintainable React components.
-7. Create a modern and polished user interface.
-
----
-
-## 👩‍💻 Author
+# 👩‍💻 Author
 
 ### Saumya Mishra
 
 **Full-Stack Development Project**
 
-Connect. Chat. Communicate. ✨
-
-**React • Node.js • Express • MongoDB • Socket.IO**
-
----
-
-## ⭐ Support
-
-If you find Velora interesting, consider giving the repository a ⭐ on GitHub.
-
-It helps support the project and future improvements.
+**React · Node.js · Express · MongoDB · Socket.IO · WebRTC**
 
 ---
 
 <p align="center">
-  <strong>Velora</strong>
-  <br />
+  <strong>Velora</strong><br/>
   Conversations, in real time.
 </p>
