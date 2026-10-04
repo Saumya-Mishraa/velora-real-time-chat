@@ -1,0 +1,203 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Velora theme system
+ * ---------------------------------------------------------------------
+ * Every color in the app is expressed as Tailwind tokens (bg, sidebar,
+ * chat, ember, amber, lavender, ink, muted, online — see
+ * tailwind.config.js) that resolve through the CSS custom properties
+ * below. Switching themes is just swapping the `data-theme` attribute
+ * on <html>; every component re-colors automatically, no JS needed.
+ *
+ * Values are stored as space-separated RGB triplets ("R G B") so
+ * Tailwind's opacity modifiers (bg-ember/40, text-ink/80, ...) keep
+ * working via rgb(var(--x) / <alpha-value>).
+ *
+ * To add a new theme: copy a block, give it a new [data-theme="id"]
+ * selector, adjust the values, then register it in
+ * client/src/context/ThemeContext.jsx.
+ */
+
+:root,
+[data-theme="nebula-ember"] {
+  --color-bg: 9 10 15;
+  --color-sidebar: 16 18 24;
+  --color-chat: 19 21 28;
+  --color-accent: 255 107 74;
+  --color-accent-2: 255 184 107;
+  --color-accent-3: 181 140 255;
+  --color-ink: 244 241 234;
+  --color-muted: 133 136 149;
+  --color-online: 139 226 139;
+  --color-avatar-1: 255 107 74;
+  --color-avatar-2: 255 184 107;
+  --color-avatar-3: 181 140 255;
+  --color-avatar-4: 139 226 139;
+  --color-avatar-5: 107 165 255;
+}
+
+[data-theme="sakura-dream"] {
+  --color-bg: 20 11 20;
+  --color-sidebar: 29 18 32;
+  --color-chat: 34 21 39;
+  --color-accent: 255 111 165;
+  --color-accent-2: 255 182 217;
+  --color-accent-3: 201 156 255;
+  --color-ink: 247 239 245;
+  --color-muted: 163 141 165;
+  --color-online: 141 226 189;
+  --color-avatar-1: 255 111 165;
+  --color-avatar-2: 255 182 217;
+  --color-avatar-3: 201 156 255;
+  --color-avatar-4: 141 226 189;
+  --color-avatar-5: 255 154 158;
+}
+
+[data-theme="ocean-pulse"] {
+  --color-bg: 6 11 20;
+  --color-sidebar: 10 19 31;
+  --color-chat: 13 24 38;
+  --color-accent: 58 160 255;
+  --color-accent-2: 95 208 255;
+  --color-accent-3: 124 147 255;
+  --color-ink: 233 244 255;
+  --color-muted: 124 152 168;
+  --color-online: 95 226 170;
+  --color-avatar-1: 58 160 255;
+  --color-avatar-2: 95 208 255;
+  --color-avatar-3: 124 147 255;
+  --color-avatar-4: 95 226 170;
+  --color-avatar-5: 158 122 255;
+}
+
+[data-theme="midnight-aurora"] {
+  --color-bg: 5 7 10;
+  --color-sidebar: 10 14 20;
+  --color-chat: 13 18 25;
+  --color-accent: 95 226 184;
+  --color-accent-2: 79 168 255;
+  --color-accent-3: 168 124 255;
+  --color-ink: 236 246 240;
+  --color-muted: 126 139 146;
+  --color-online: 111 226 154;
+  --color-avatar-1: 95 226 184;
+  --color-avatar-2: 79 168 255;
+  --color-avatar-3: 168 124 255;
+  --color-avatar-4: 111 226 154;
+  --color-avatar-5: 255 154 158;
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  @apply bg-bg text-ink font-body;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Smooth, premium color transitions whenever the active theme changes.
+   Scoped to color-related properties only (never layout) so it never
+   fights with Framer Motion's own transform/opacity animations. */
+body,
+body * {
+  transition: background-color 0.5s cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 0.5s cubic-bezier(0.22, 1, 0.36, 1),
+    color 0.4s cubic-bezier(0.22, 1, 0.36, 1),
+    fill 0.4s cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--color-accent) / 0.25);
+  border-radius: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Mobile viewport-height fix — functional only, not a design change.
+   Tailwind's h-screen is 100vh, which on mobile Safari/Chrome is measured
+   against the *largest* possible viewport (address bar hidden), not what's
+   actually visible. With the address bar shown, or the on-screen keyboard
+   open, that overshoots the real visible area, so the bottom of the chat
+   (the message input) ends up pushed under the browser chrome or the
+   keyboard. 100dvh tracks the real, current visible viewport instead.
+   Declared as a fallback pair (not a Tailwind arbitrary value) so browsers
+   without dvh support keep the working 100vh rather than getting an
+   invalid, dropped height. */
+.h-screen-safe {
+  height: 100vh;
+  height: 100dvh;
+}
+
+/* Same fix as .h-screen-safe, for elements capped at a percentage of the
+   viewport (dialogs) rather than the full screen: 100vh overshoots the
+   real visible area on mobile when the address bar / keyboard is showing. */
+.max-h-modal-safe {
+  max-height: 85vh;
+  max-height: 85dvh;
+}
+
+/* Brief highlight flash used when jumping to a message (search results,
+   reply-preview taps, pinned-message taps). Purely a background pulse —
+   never touches layout — so it can safely be toggled with plain
+   classList add/remove from outside React (see Dashboard.jsx) as well
+   as from ChatWindow's own React state. */
+.message-flash {
+  animation: message-flash 1.6s ease-out;
+}
+@keyframes message-flash {
+  0%, 40% {
+    background-color: rgb(var(--color-accent-2) / 0.18);
+    border-radius: 0.75rem;
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+/* Global overflow guard. Several fixed-position panels (chat info,
+   lightbox, emoji sheet) intentionally exceed the normal document flow;
+   this makes sure nothing production-wide forces horizontal scrolling
+   on narrow phones (320-430px) if a child element's intrinsic width
+   ever exceeds the viewport. */
+html, body {
+  overflow-x: hidden;
+  max-width: 100vw;
+}
+
+/* Emoji picker library sizing safety net: even with an explicit numeric
+   `width` prop (see MessageInput.jsx), the underlying package can render
+   a shadow-DOM host slightly wider on some Android WebViews. Belt and
+   suspenders. */
+.epr-main {
+  max-width: 100%;
+}
+
+
+/* Touch / small-screen scrollbars: slim them down, and hide the chat
+   message list's bar entirely on phones so it never eats into the
+   viewport width. Desktop (>=1024px) scrollbars are untouched. */
+@media (max-width: 1023px) {
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+}
+@media (max-width: 639px) {
+  .chat-scroll { scrollbar-width: none; }
+  .chat-scroll::-webkit-scrollbar { display: none; }
+}
