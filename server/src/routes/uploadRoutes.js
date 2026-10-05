@@ -76,8 +76,14 @@ router.post(
       });
     } catch (err) {
       if (req.file?.path) fs.unlink(req.file.path, () => {});
-      console.error("Upload failed:", err);
-      res.status(500).json({ message: "Upload failed. Please try again.", error: err.message });
+console.error("Upload failed:", {
+  message: err.message,
+  http_code: err.http_code,
+  name: err.name,
+  error: err.error,
+  response: err.response?.body,
+  headers: err.response?.headers,
+});      res.status(500).json({ message: "Upload failed. Please try again.", error: err.message });
     }
   }
 );

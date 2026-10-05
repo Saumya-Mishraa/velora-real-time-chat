@@ -30,16 +30,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const server = http.createServer(app);
 
-// Render (and most PaaS platforms) sit behind a reverse proxy, so without
-// this, req.protocol always reports "http" even when the public request
-// was https — which breaks any URL we build from req.protocol/req.get("host")
-// (see routes/uploadRoutes.js).
 app.set("trust proxy", 1);
 
-// Allowed frontend URLs. CLIENT_URL is read from the environment on top of
-// the known deployed origins below, so a differently-named frontend
-// deployment (e.g. after fully renaming the Render service) can be
-// authorized without editing code.
 const allowedOrigins = [
   "http://localhost:5173",
   "https://nuvora-client.onrender.com",
@@ -51,8 +43,7 @@ if (process.env.CLIENT_URL && !allowedOrigins.includes(process.env.CLIENT_URL)) 
 // CORS configuration
 const corsOptions = {
   origin: (origin, callback) => {
-    // Allow requests without an origin
-    // (for example, Postman or server-to-server requests)
+    
     if (!origin) {
       return callback(null, true);
     }
@@ -71,10 +62,7 @@ const io = new Server(server, {
   cors: corsOptions,
 });
 
-// Makes the Socket.IO server reachable from REST controllers (req.app.get("io"))
-// so actions like creating a conversation can push real-time updates —
-// e.g. joining the other member's socket to the new conversation room —
-// without waiting for that socket to reconnect.
+
 app.set("io", io);
 
 // Express CORS
@@ -83,10 +71,6 @@ app.use(cors(corsOptions));
 // Parse JSON
 app.use(express.json({ limit: "10mb" }));
 
-// Static uploads folder. Hardened: no content sniffing, and anything that
-// isn't plainly safe to render inline (images, audio, video, PDF, text)
-// is forced to download so an uploaded file can never execute in the
-// app's origin. `?download=1[&name=...]` forces a download for any type.
 app.use(
   "/uploads",
   express.static(path.join(__dirname, "uploads"), {
@@ -151,9 +135,7 @@ connectDB()
     server.listen(PORT, "0.0.0.0", () => {
       console.log(`Velora server running on port ${PORT}`);
     });
-    // Belt and braces for the 24h Status rule: the TTL index normally
-    // deletes expired statuses, and this sweep covers databases where
-    // TTL isn't available. Reads already ignore expired rows.
+    
     const sweep = () => Status.deleteMany({ expiresAt: { $lte: new Date() } }).catch(() => {});
     sweep();
     setInterval(sweep, 10 * 60 * 1000).unref();
