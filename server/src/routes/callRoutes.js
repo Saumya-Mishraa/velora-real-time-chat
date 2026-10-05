@@ -5,8 +5,6 @@ import { buildIceServers, callHistoryFor, getUserCallId } from "../socket/callHa
 const router = express.Router();
 router.use(protect);
 
-// ICE (STUN/TURN) configuration for WebRTC. TURN credentials, when
-// configured, are minted per request rather than shipped in the bundle.
 router.get("/ice", (req, res) => {
   res.json({ iceServers: buildIceServers(String(req.user._id)) });
 });

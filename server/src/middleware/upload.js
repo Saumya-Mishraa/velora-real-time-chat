@@ -10,16 +10,11 @@ export const uploadDir = path.join(__dirname, "..", "uploads");
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
-
-// Largest single file accepted. Override with MAX_UPLOAD_MB. (Cloudinary's
-// own plan limits still apply when USE_CLOUDINARY=true — the server
-// surfaces its error message to the client if it rejects a file.)
 export const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB) || 50;
 
 // General files are welcome, but anything a browser or server could
 // *execute* when opened is not: HTML/SVG/JS (stored XSS when served from
-// our origin), server-side scripts, and native executables/installers.
-// Users who really need to send one can put it in a .zip.
+
 const BLOCKED_EXTENSIONS = new Set([
   "html", "htm", "xhtml", "shtml", "svg", "svgz", "xml", "xsl", "js", "mjs", "cjs", "jsx",
   "php", "php3", "php4", "php5", "phtml", "jsp", "jspx", "asp", "aspx", "cgi", "pl", "py",
