@@ -65,10 +65,16 @@ router.post(
 
       if (process.env.USE_CLOUDINARY === "true") {
         const result = await cloudinary.uploader.upload(req.file.path, {
-          folder: "velora",
-          resource_type: cloudinaryResourceType(mimeType),
-          use_filename: false,
-        });
+  folder: "velora",
+  resource_type: cloudinaryResourceType(mimeType),
+  use_filename: false,
+});
+
+console.log("Cloudinary upload success:", {
+  public_id: result.public_id,
+  secure_url: result.secure_url,
+  resource_type: result.resource_type,
+});
         fs.unlink(req.file.path, () => {});
         return res.status(201).json({
           url: result.secure_url,
