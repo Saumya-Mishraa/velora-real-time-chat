@@ -35,8 +35,17 @@ import { mediaUrl, downloadUrl, fmtBytes, fmtDuration, fileTypeLabel } from "../
 
 const REACTIONS = ["❤️", "😂", "👍", "😮", "😢", "👏"];
 
-const formatTime = (date) =>
-  new Date(date).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const formatTime = (date) => {
+  const parsed = date ? new Date(date) : null;
+  if (!parsed || Number.isNaN(parsed.getTime())) return "";
+  return parsed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+};
+
+const getId = (value) => {
+  if (value == null) return "";
+  if (typeof value === "object") return String(value._id || value.id || value);
+  return String(value);
+};
 
 const formatSize = (bytes = 0) => fmtBytes(bytes);
 
@@ -325,6 +334,7 @@ const MessageBubble = ({
   const [showReactions, setShowReactions] = useState(false);
   const [imgLoaded, setImgLoaded] = useState(false);
   const [imgError, setImgError] = useState(false);
+  const [imageRetry, setImageRetry] = useState(0);
   const [lightboxSrc, setLightboxSrc] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState(message.text || "");
@@ -338,6 +348,10 @@ const MessageBubble = ({
   const bubbleRef = useRef(null);
   const triggerRef = useRef(null);
   const actionsRef = useRef(null);
+
+  useEffect(() => {
+    if (!isEditing) setEditText(message.text || "");
+  }, [message.text, isEditing]);
 
   useEffect(() => {
     if (highlighted && bubbleRef.current) {
@@ -419,8 +433,31 @@ const MessageBubble = ({
   // colored (seen). Group chats only show "seen" once every other
   // member has read it; otherwise stay at delivered.
   const othersCount = Math.max(0, (memberCount || 2) - 1);
-  const deliveredCount = (message.deliveredTo || []).filter((u) => (u.id || u._id || u) !== currentUserId).length;
-  const seenCount = (message.readBy || []).filter((u) => (u.id || u._id || u) !== currentUserId).length;
+  const normalizedCurrentUserId = getId(currentUserId);
+  const deliveredCount = (message.deliveredTo || []).filter(
+    (user) => getId(user) !== normalizedCurrentUserId
+  ).length;
+  const seenCount = (message.readBy || []).filter(
+    (user) => getId(user) !== normalizedCurrentUserId
+  ).length;
+
+  // The API stores one reaction per user. Group them for a compact,
+  // readable reaction strip and highlight the current user's selection.
+  const reactionSummary = (message.reactions || []).reduce((summary, reaction) => {
+    if (!reaction?.emoji) return summary;
+    const existing = summary.find((item) => item.emoji === reaction.emoji);
+    if (existing) {
+      existing.count += 1;
+      if (normalizedCurrentUserId && getId(reaction.user) === normalizedCurrentUserId) existing.mine = true;
+    } else {
+      summary.push({
+        emoji: reaction.emoji,
+        count: 1,
+        mine: Boolean(normalizedCurrentUserId) && getId(reaction.user) === normalizedCurrentUserId,
+      });
+    }
+    return summary;
+  }, []);
   const isDelivered = deliveredCount > 0;
   const isSeen = isGroup ? seenCount >= othersCount && othersCount > 0 : seenCount > 0;
 
@@ -457,7 +494,19 @@ const MessageBubble = ({
       >
         {!isOwn && showSender && <Avatar name={message.sender?.name} size={28} />}
 
-        <div ref={triggerRef} className="relative min-w-0" onClick={() => setShowActions((s) => !s)}>
+        <div
+          ref={triggerRef}
+          className="relative min-w-0"
+          onClick={() => {
+            // Hover devices reveal actions on pointer entry. On touch devices,
+            // a tap toggles the toolbar because there is no hover state.
+            if (window.matchMedia?.("(hover: none)").matches) {
+              setShowActions((visible) => !visible);
+              setShowDeleteMenu(false);
+              setShowReactions(false);
+            }
+          }}
+        >
           {!isOwn && isGroup && showSender && (
             <p className="text-xs text-ember/80 font-medium px-1 mb-0.5">{message.sender?.name}</p>
           )}
@@ -496,6 +545,7 @@ const MessageBubble = ({
                   onClick={() => {
                     setImgError(false);
                     setImgLoaded(false);
+                    setImageRetry((attempt) => attempt + 1);
                   }}
                   className={`w-full max-w-[240px] sm:max-w-xs flex flex-col items-center justify-center gap-1.5 rounded-lg mb-1 py-6 text-center ${
                     isOwn ? "bg-black/15" : "bg-black/20"
@@ -510,6 +560,7 @@ const MessageBubble = ({
                     <div className="absolute inset-0 rounded-lg bg-black/10 animate-pulse" style={{ aspectRatio: "4 / 3" }} />
                   )}
                   <motion.img
+                    key={`${message._id || "image"}-${imageRetry}`}
                     src={mediaUrl(message.attachment.url)}
                     alt={message.attachment.name || "Shared image"}
                     onLoad={() => setImgLoaded(true)}
@@ -600,18 +651,30 @@ const MessageBubble = ({
             </div>
           </div>
 
-          {message.reactions?.length > 0 && (
-            <div className="flex gap-1 mt-1">
-              {message.reactions.map((r, i) => (
-                <motion.span
-                  key={i}
+          {reactionSummary.length > 0 && (
+            <div className={`flex flex-wrap gap-1 mt-1 ${isOwn ? "justify-end" : "justify-start"}`}>
+              {reactionSummary.map((reaction) => (
+                <motion.button
+                  key={reaction.emoji}
+                  type="button"
                   initial={{ scale: 0, rotate: -15 }}
                   animate={{ scale: 1, rotate: 0 }}
+                  whileTap={{ scale: 0.92 }}
                   transition={{ type: "spring", stiffness: 500, damping: 15 }}
-                  className="text-xs bg-chat border border-white/10 rounded-full px-1.5 py-0.5"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onReact?.(message, reaction.emoji);
+                  }}
+                  aria-label={`${reaction.emoji}, ${reaction.count} ${reaction.count === 1 ? "reaction" : "reactions"}${reaction.mine ? ", yours" : ""}`}
+                  title={reaction.mine ? "Remove your reaction" : "React with this emoji"}
+                  className={`text-xs rounded-full px-1.5 py-0.5 border transition-colors ${
+                    reaction.mine
+                      ? "bg-ember/15 border-ember/50"
+                      : "bg-chat border-white/10 hover:border-white/25"
+                  }`}
                 >
-                  {r.emoji}
-                </motion.span>
+                  {reaction.emoji}{reaction.count > 1 && <span className="ml-1 opacity-75">{reaction.count}</span>}
+                </motion.button>
               ))}
             </div>
           )}
@@ -639,7 +702,7 @@ const MessageBubble = ({
                 <Smile size={14} />
               </button>
               <button
-                onClick={() => onReply?.(message)}
+                onClick={() => { onReply?.(message); setShowActions(false); }}
                 className="p-1 rounded-full hover:bg-white/10 text-muted hover:text-ember transition"
                 title="Reply"
                 aria-label="Reply"
@@ -648,7 +711,14 @@ const MessageBubble = ({
               </button>
               {message.text && message.type !== "call" && (
                 <button
-                  onClick={() => navigator.clipboard?.writeText(message.text || "")}
+                  onClick={async () => {
+                  try {
+                    await navigator.clipboard?.writeText(message.text || "");
+                  } catch (error) {
+                    console.warn("Could not copy message text.", error);
+                  }
+                  setShowActions(false);
+                }}
                   className="p-1 rounded-full hover:bg-white/10 text-muted hover:text-ember transition"
                   title="Copy"
                   aria-label="Copy text"
@@ -658,7 +728,7 @@ const MessageBubble = ({
               )}
               {isOwn && message.type === "text" && !message.shared && (
                 <button
-                  onClick={() => setIsEditing(true)}
+                  onClick={() => { setIsEditing(true); setShowActions(false); }}
                   className="p-1 rounded-full hover:bg-white/10 text-muted hover:text-ember transition"
                   title="Edit"
                   aria-label="Edit message"
@@ -667,7 +737,7 @@ const MessageBubble = ({
                 </button>
               )}
               <button
-                onClick={() => (message.pinned ? onUnpin?.(message) : onPin?.(message))}
+                onClick={() => { message.pinned ? onUnpin?.(message) : onPin?.(message); setShowActions(false); }}
                 className="p-1 rounded-full hover:bg-white/10 text-muted hover:text-amber transition"
                 title={message.pinned ? "Unpin" : "Pin"}
                 aria-label={message.pinned ? "Unpin message" : "Pin message"}
@@ -676,7 +746,7 @@ const MessageBubble = ({
               </button>
               {isOwn && (
                 <button
-                  onClick={() => onShowInfo?.(message)}
+                  onClick={() => { onShowInfo?.(message); setShowActions(false); }}
                   className="p-1 rounded-full hover:bg-white/10 text-muted hover:text-ember transition"
                   title="Message info"
                   aria-label="Message info"
@@ -703,6 +773,7 @@ const MessageBubble = ({
                       onClick={() => {
                         onDeleteForMe?.(message);
                         setShowDeleteMenu(false);
+                        setShowActions(false);
                       }}
                       className="block w-full text-left px-3 py-1.5 hover:bg-white/5"
                     >
@@ -715,6 +786,7 @@ const MessageBubble = ({
                             onDeleteForEveryone?.(message);
                           }
                           setShowDeleteMenu(false);
+                          setShowActions(false);
                         }}
                         className="block w-full text-left px-3 py-1.5 hover:bg-white/5 text-red-400"
                       >
@@ -737,6 +809,7 @@ const MessageBubble = ({
                       onClick={() => {
                         onReact?.(message, emoji);
                         setShowReactions(false);
+                        setShowActions(false);
                       }}
                       className="hover:scale-125 transition-transform"
                     >

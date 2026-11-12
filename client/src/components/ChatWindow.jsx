@@ -44,6 +44,8 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
   const conversationId = conversation?._id;
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [hasMoreOlder, setHasMoreOlder] = useState(true);
   const [replyTo, setReplyTo] = useState(null);
   const [typingUsers, setTypingUsers] = useState(new Map());
   const [atBottom, setAtBottom] = useState(true);
@@ -65,6 +67,10 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
   const bottomRef = useRef(null);
   const typingClearTimeouts = useRef(new Map());
   const deliveredAckedIds = useRef(new Set());
+  const loadingOlderRef = useRef(false);
+  const hasMoreOlderRef = useRef(true);
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
 
   const isBlocked =
     !conversation?.isGroup &&
@@ -95,6 +101,10 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
     let cancelled = false;
     setLoading(true);
     setMessages([]);
+    setLoadingOlder(false);
+    setHasMoreOlder(true);
+    hasMoreOlderRef.current = true;
+    loadingOlderRef.current = false;
     setNewMessageCount(0);
     setAtBottom(true);
     setShowSearch(false);
@@ -106,7 +116,13 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
 
     api
       .get(`/messages/${conversationId}`)
-      .then(({ data }) => !cancelled && setMessages(data.messages))
+      .then(({ data }) => {
+        if (cancelled) return;
+        mergeMessages(data.messages || []);
+        const hasOlder = (data.messages || []).length >= 30;
+        hasMoreOlderRef.current = hasOlder;
+        setHasMoreOlder(hasOlder);
+      })
       .catch(() => {})
       .finally(() => !cancelled && setLoading(false));
 
@@ -118,7 +134,7 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
     return () => {
       cancelled = true;
     };
-  }, [conversationId]);
+  }, [conversationId, mergeMessages]);
 
   // (Re)join the room whenever the socket (re)connects or this chat opens.
   useEffect(() => {
@@ -303,21 +319,61 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, conversationId]);
 
+  const loadOlderMessages = useCallback(async () => {
+    const scroller = scrollRef.current;
+    const firstMessage = messagesRef.current[0];
+    const activeConversationId = conversationRef.current?._id;
+    if (!scroller || !firstMessage || !activeConversationId || !hasMoreOlderRef.current || loadingOlderRef.current) return;
+
+    loadingOlderRef.current = true;
+    setLoadingOlder(true);
+    const previousScrollHeight = scroller.scrollHeight;
+    const previousScrollTop = scroller.scrollTop;
+
+    try {
+      const { data } = await api.get(`/messages/${activeConversationId}`, {
+        params: { before: firstMessage.createdAt, limit: 50 },
+      });
+      if (conversationRef.current?._id !== activeConversationId) return;
+      const olderMessages = data.messages || [];
+      const hasOlder = olderMessages.length >= 50;
+      hasMoreOlderRef.current = hasOlder;
+      setHasMoreOlder(hasOlder);
+
+      if (olderMessages.length) {
+        mergeMessages(olderMessages);
+        // Keep the same message under the user's eyes after prepending history.
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            const currentScroller = scrollRef.current;
+            if (!currentScroller) return;
+            currentScroller.scrollTop = previousScrollTop + (currentScroller.scrollHeight - previousScrollHeight);
+          });
+        });
+      }
+    } catch {
+      // A transient history request failure should not break the chat.
+      // The next scroll-to-top attempt can retry it.
+    } finally {
+      loadingOlderRef.current = false;
+      if (conversationRef.current?._id === activeConversationId) setLoadingOlder(false);
+    }
+  }, [mergeMessages]);
+
   const handleScroll = () => {
     const scroller = scrollRef.current;
     if (!scroller) return;
     const isAtBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < BOTTOM_THRESHOLD;
     setAtBottom(isAtBottom);
     if (isAtBottom) setNewMessageCount(0);
+    if (scroller.scrollTop < 100) loadOlderMessages();
   };
 
   const scrollToBottom = () => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
     setNewMessageCount(0);
   };
 
-  const messagesRef = useRef(messages);
-  messagesRef.current = messages;
   const ensureLoadedRef = useRef(null);
 
   const jumpToMessage = useCallback(async (messageId) => {
@@ -444,15 +500,20 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
   const typingNames = Array.from(typingUsers.values());
 
   const send = (payload) => {
+    const activeConversationId = conversationRef.current?._id;
     if (!socket?.connected) {
       setSendError("You're offline. Reconnecting — try again in a moment.");
       return false;
     }
-    socket.emit("message:send", { conversationId: conversation._id, ...payload }, (res) => {
+    if (!activeConversationId) return false;
+
+    setSendError("");
+    socket.emit("message:send", { conversationId: activeConversationId, ...payload }, (res) => {
+      // Ignore a late acknowledgement if the user has switched chats.
+      if (conversationRef.current?._id !== activeConversationId) return;
       if (res?.error) setSendError(res.error);
       else if (res?.message) mergeMessages([res.message]);
     });
-    setSendError("");
     return true;
   };
 
@@ -637,6 +698,13 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
         onScroll={handleScroll}
         className="chat-scroll relative z-10 flex-1 min-h-0 overflow-y-auto overflow-x-hidden pt-8 pb-4"
       >
+        {!loading && loadingOlder && (
+          <div className="sticky top-2 z-20 flex justify-center pointer-events-none" aria-live="polite">
+            <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-chat/90 px-3 py-1.5 text-[11px] text-muted shadow-lg backdrop-blur">
+              <Loader2 size={12} className="animate-spin" /> Loading older messages
+            </span>
+          </div>
+        )}
         {loading ? (
           <div className="flex items-center justify-center h-full text-muted text-sm">Loading messages…</div>
         ) : messages.length === 0 ? (
