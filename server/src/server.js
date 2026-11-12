@@ -1,13 +1,10 @@
 import express from "express";
 import http from "http";
 import cors from "cors";
-import dotenv from "dotenv";
+import "dotenv/config";
 import path from "path";
 import { fileURLToPath } from "url";
 import { Server } from "socket.io";
-
-// Load environment variables
-dotenv.config();
 
 import { connectDB } from "./config/db.js";
 import mimeTypes from "mime-types";
