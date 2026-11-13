@@ -158,87 +158,63 @@ const ConversationRow = ({
         isActive ? "bg-ember/10" : "hover:bg-white/5"
       }`}
     >
-         {" "}
       {isActive && (
         <motion.div
           layoutId="active-conversation"
           className="absolute left-0 top-2 bottom-2 w-1 rounded-full bg-ember"
         />
       )}
-         {" "}
       <div className="relative flex-shrink-0">
-             {" "}
         <Avatar
           name={label}
           src={c.isGroup ? c.avatar : other?.avatar}
           size={44}
         />
-             {" "}
         {!c.isGroup && (
           <OnlineIndicator
             online={isOnline}
             className="absolute -bottom-0.5 -right-0.5"
           />
         )}
-           {" "}
       </div>
-         {" "}
       <div className="flex-1 min-w-0">
-             {" "}
         <div className="flex items-center justify-between gap-1">
-                 {" "}
           <span className="font-medium truncate flex items-center gap-1">
-                     {" "}
             {c.mySettings?.pinned && (
               <Pin size={11} className="text-amber flex-shrink-0" />
             )}
-                      {label}       {" "}
+                      {label}
           </span>
-                 {" "}
           <span className="text-xs text-muted flex-shrink-0">
             {timeAgo(c.lastMessage?.createdAt || c.updatedAt)}
           </span>
-               {" "}
         </div>
-             {" "}
         <div className="flex items-center justify-between gap-1">
-                 {" "}
           {draft ? (
             <p className="text-sm text-muted truncate min-w-0">
-                         {" "}
-              <span className="text-ember font-medium">Draft: </span>           {" "}
-              {draft.text.replace(/\s+/g, " ")}         {" "}
+              <span className="text-ember font-medium">Draft: </span>
+              {draft.text.replace(/\s+/g, " ")}
             </p>
           ) : (
             <p
               className={`text-sm truncate min-w-0 flex items-center gap-1 ${preview.danger ? "text-red-400" : "text-muted"}`}
             >
-                         {" "}
               {PreviewIcon && (
                 <PreviewIcon size={13} className="flex-shrink-0" />
               )}
-                          <span className="truncate">{preview.text}</span>     
-                 {" "}
+                          <span className="truncate">{preview.text}</span>
             </p>
           )}
-                 {" "}
           <div className="flex items-center gap-1 flex-shrink-0">
-                     {" "}
-            {isMuted(c) && <BellOff size={12} className="text-muted" />}       
-             {" "}
+            {isMuted(c) && <BellOff size={12} className="text-muted" />}
             {c.unreadCount > 0 && (
               <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-ember text-bg text-[10px] font-semibold flex items-center justify-center">
-                              {c.unreadCount > 99 ? "99+" : c.unreadCount}     
-                     {" "}
+                              {c.unreadCount > 99 ? "99+" : c.unreadCount}
               </span>
             )}
-                   {" "}
           </div>
-               {" "}
         </div>
-           {" "}
       </div>
-       {" "}
     </motion.button>
   );
 };
@@ -312,50 +288,35 @@ const Sidebar = ({
 
   return (
     <aside className="w-full sm:w-72 md:w-80 flex-shrink-0 min-w-0 bg-sidebar border-r border-white/5 flex flex-col h-full">
-           {" "}
       <div className="px-4 sm:px-5 pt-4 pb-3 flex items-center justify-between">
-               {" "}
         <div className="flex items-center gap-2">
-                   {" "}
-          <div className="w-8 h-8 rounded-xl bg-ember flex items-center justify-center font-display font-bold text-bg">
-                        V          {" "}
-          </div>
-                   {" "}
+          <div className="w-8 h-8 rounded-xl bg-ember flex items-center justify-center font-display font-bold text-bg text-lg leading-none select-none flex-shrink-0" aria-hidden="true">V</div>
           <span className="font-display font-semibold text-lg tracking-tight">
             Velora
           </span>
-                 {" "}
         </div>
-               {" "}
         <div className="flex items-center gap-1">
-                   {" "}
           <button
             onClick={onOpenNewChat}
             title="New chat"
             aria-label="New chat"
             className="w-10 h-10 flex items-center justify-center rounded-full text-muted hover:text-ember hover:bg-white/5 transition-colors"
           >
-                        <MessageSquarePlus size={18} />         {" "}
+                        <MessageSquarePlus size={18} />
           </button>
-                   {" "}
           <button
             onClick={onOpenNewGroup}
             title="New group"
             aria-label="New group"
             className="w-10 h-10 flex items-center justify-center rounded-full text-muted hover:text-lavender hover:bg-white/5 transition-colors"
           >
-                        <Users size={18} />         {" "}
+                        <Users size={18} />
           </button>
-                 {" "}
         </div>
-             {" "}
       </div>
-           {" "}
       {tabs.length > 0 && (
         <nav className="px-3 sm:px-4 pb-2" aria-label="Sections">
-                   {" "}
           <div className="grid grid-cols-4 gap-1 bg-chat rounded-xl p-1">
-                       {" "}
             {tabs.map((t) => {
               const Icon = t.icon;
 
@@ -373,39 +334,29 @@ const Sidebar = ({
                       : "text-muted hover:text-ink hover:bg-white/5"
                   }`}
                 >
-                                    <Icon size={17} />                 {" "}
-                  <span className="leading-none">{t.label}</span>               
-                   {" "}
+                                    <Icon size={17} />
+                  <span className="leading-none">{t.label}</span>
                   {t.badge > 0 && (
                     <span className="absolute top-1 right-1.5 min-w-[16px] h-4 px-1 rounded-full bg-ember text-bg text-[9px] font-semibold flex items-center justify-center">
-                                            {t.badge > 9 ? "9+" : t.badge}     
-                                   {" "}
+                                            {t.badge > 9 ? "9+" : t.badge}
                     </span>
                   )}
-                                 {" "}
                 </button>
               );
             })}
-                     {" "}
           </div>
-                 {" "}
         </nav>
       )}
-           {" "}
       {panel ? (
         <div className="flex-1 min-h-0 flex flex-col">{panel}</div>
       ) : (
         <>
-               {" "}
           <div className="px-4 sm:px-5 pb-3 pt-1">
-                   {" "}
             <div className="relative">
-                       {" "}
               <Search
                 size={16}
                 className="absolute left-3 top-1/2 -translate-y-1/2 text-muted"
               />
-                       {" "}
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
@@ -413,26 +364,19 @@ const Sidebar = ({
                 aria-label="Search conversations"
                 className="w-full bg-chat border border-white/5 focus:border-ember/40 outline-none rounded-full pl-9 pr-3 py-2 text-sm placeholder:text-muted transition-colors"
               />
-                     {" "}
             </div>
-                 {" "}
           </div>
-               {" "}
           <div className="flex-1 overflow-y-auto px-2 min-h-0">
-                   {" "}
             {sorted.length === 0 && archived.length === 0 ? (
               <div className="text-center text-muted text-sm mt-16 px-6">
-                           {" "}
                 {!loaded
                   ? "Loading conversations…"
                   : conversations.length === 0
                     ? "Your conversations start here."
                     : "No conversations found."}
-                         {" "}
               </div>
             ) : (
               <AnimatePresence initial={false}>
-                           {" "}
                 {sorted.map((c) => (
                   <ConversationRow
                     key={c._id}
@@ -449,29 +393,23 @@ const Sidebar = ({
                     currentUserId={user?.id}
                   />
                 ))}
-                         {" "}
               </AnimatePresence>
             )}
-                   {" "}
             {archived.length > 0 && (
               <div className="mt-2">
-                           {" "}
                 <button
                   onClick={() => setShowArchived((s) => !s)}
                   className="w-full flex items-center gap-2 px-3 py-2 text-xs text-muted uppercase tracking-wide hover:text-ink"
                 >
                                 <Archive size={12} />              Archived (
-                  {archived.length})              {" "}
+                  {archived.length})
                   <ChevronDown
                     size={12}
                     className={`ml-auto transition-transform ${showArchived ? "rotate-180" : ""}`}
                   />
-                             {" "}
                 </button>
-                           {" "}
                 {showArchived && (
                   <AnimatePresence initial={false}>
-                                   {" "}
                     {archived.map((c) => (
                       <ConversationRow
                         key={c._id}
@@ -488,47 +426,36 @@ const Sidebar = ({
                         currentUserId={user?.id}
                       />
                     ))}
-                                 {" "}
                   </AnimatePresence>
                 )}
-                         {" "}
               </div>
             )}
-                 {" "}
           </div>
-               {" "}
         </>
       )}
-           {" "}
       <div className="px-4 sm:px-5 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))] border-t border-white/5 flex items-center gap-3">
-                <Avatar name={user?.name} src={user?.avatar} size={38} />       {" "}
+                <Avatar name={user?.name} src={user?.avatar} size={38} />
         <div className="flex-1 min-w-0">
                     <p className="font-medium truncate text-sm">{user?.name}</p>
-                   {" "}
-          <p className="text-xs text-muted truncate">@{user?.username}</p>     
-           {" "}
+          <p className="text-xs text-muted truncate">@{user?.username}</p>
         </div>
-               {" "}
         <button
           onClick={onOpenSettings}
           className="w-10 h-10 flex items-center justify-center rounded-full text-muted hover:text-ink hover:bg-white/5 transition-colors"
           title="Settings"
           aria-label="Settings"
         >
-                    <Settings size={18} />       {" "}
+                    <Settings size={18} />
         </button>
-               {" "}
         <button
           onClick={logout}
           className="w-10 h-10 flex items-center justify-center rounded-full text-muted hover:text-red-400 hover:bg-white/5 transition-colors"
           title="Logout"
           aria-label="Logout"
         >
-          <LogOut size={18} />       {" "}
+          <LogOut size={18} />
         </button>
-             {" "}
       </div>
-         {" "}
     </aside>
   );
 };
