@@ -348,22 +348,18 @@ const ChatInfoPanel = ({
             className="fixed inset-y-0 right-0 w-full max-w-sm sm:static sm:w-80 sm:max-w-none flex-shrink-0 bg-sidebar border-l border-white/5 h-full flex flex-col z-50"
           >
                        {" "}
-            <div className="flex items-center justify-between px-5 pt-[calc(1rem+env(safe-area-inset-top,0px))] pb-4 sm:pt-4 border-b border-white/5 flex-shrink-0">
-                           {" "}
-              <h3 className="font-display font-semibold">
+            <div className="flex items-center justify-between gap-3 px-5 pt-[calc(1rem+env(safe-area-inset-top,0px))] pb-4 sm:pt-4 border-b border-white/5 flex-shrink-0">
+              <h3 className="font-display font-semibold truncate">
                 {isGroup ? "Group info" : "Contact info"}
               </h3>
-                           {" "}
               <button
                 onClick={onClose}
-                className="text-muted hover:text-ink"
+                className="flex-shrink-0 w-8 h-8 -mr-2 inline-flex items-center justify-center rounded-full text-muted hover:text-ink hover:bg-white/10 transition-colors"
                 aria-label="Close"
               >
-                                <X size={18} />             {" "}
+                <X size={18} />
               </button>
-                         {" "}
             </div>
-                       {" "}
             <div className="flex gap-1 px-3 pt-3 border-b border-white/5 flex-shrink-0">
                            {" "}
               {["info", "settings"].map((t) => (
