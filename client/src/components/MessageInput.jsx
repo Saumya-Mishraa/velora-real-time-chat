@@ -194,6 +194,7 @@ const MessageInput = ({
 
   const fileRef = useRef(null);
   const typingTimeout = useRef(null);
+  const typingSentAt = useRef(0);
   const inputRowRef = useRef(null);
   const errorTimeout = useRef(null);
   const textareaRef = useRef(null);
@@ -278,7 +279,126 @@ const MessageInput = ({
     streamRef.current = null;
   };
 
+  // ---- Small helpers ----------------------------------------------
+
+  // Shows an error above the composer and clears it after a few seconds.
+  const flashError = useCallback((message) => {
+    setUploadError(message);
+    clearTimeout(errorTimeout.current);
+    errorTimeout.current = setTimeout(() => setUploadError(""), 6000);
+  }, []);
+
+  // Brief "squish" on the send button.
+  const pulse = () => {
+    setSendPulse(true);
+    setTimeout(() => setSendPulse(false), 140);
+  };
+
+  // Typing indicator: tell the other side we're typing at most every 2s
+  // (their UI hides it after 3s of silence) and that we stopped after 2.5s
+  // of inactivity, on send, on blur, and when the chat changes.
+  const stopTyping = useCallback(() => {
+    clearTimeout(typingTimeout.current);
+    typingTimeout.current = null;
+    if (typingSentAt.current) {
+      typingSentAt.current = 0;
+      onTyping?.(false);
+    }
+  }, [onTyping]);
+
+  const notifyTyping = () => {
+    const now = Date.now();
+    if (!typingSentAt.current || now - typingSentAt.current > 2000) {
+      typingSentAt.current = now;
+      onTyping?.(true);
+    }
+    clearTimeout(typingTimeout.current);
+    typingTimeout.current = setTimeout(stopTyping, 2500);
+  };
+
+  const handleChange = (e) => {
+    const value = e.target.value;
+    setDraftText(value);
+    if (value.trim()) notifyTyping();
+    else stopTyping();
+  };
+
+  const insertAtCursor = (insertion) => {
+    const el = textareaRef.current;
+    const start = el?.selectionStart ?? text.length;
+    const end = el?.selectionEnd ?? text.length;
+    const next = text.slice(0, start) + insertion + text.slice(end);
+    setDraftText(next);
+    notifyTyping();
+    requestAnimationFrame(() => {
+      const node = textareaRef.current;
+      if (!node) return;
+      node.focus();
+      const caret = start + insertion.length;
+      node.setSelectionRange(caret, caret);
+    });
+  };
+
+  const handleEmojiClick = (emojiData) => {
+    insertAtCursor(emojiData?.emoji || "");
+  };
+
   
+  // Files, recordings and the emoji picker belong to one conversation.
+  // Without this, a file picked in one chat could be sent to another.
+  useEffect(() => {
+    return () => {
+      stopTyping();
+      setShowEmoji(false);
+
+      stagedRef.current.forEach((item) => {
+        if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+      });
+      setStaged([]);
+
+      discardOnStopRef.current = true;
+      try {
+        if (recorderRef.current && recorderRef.current.state !== "inactive") {
+          recorderRef.current.stop();
+        }
+      } catch {
+        // already stopped
+      }
+      releaseStream();
+      if (recordedRef.current?.url) URL.revokeObjectURL(recordedRef.current.url);
+      setRecorded(null);
+      resetVoice();
+      setUploadError("");
+      setMicError("");
+    };
+    // Runs when the conversation changes (cleanup of the previous one) and on unmount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationId]);
+
+  useEffect(
+    () => () => {
+      clearTimeout(errorTimeout.current);
+      clearTimeout(typingTimeout.current);
+      clearInterval(tickRef.current);
+    },
+    []
+  );
+
+  // Close the emoji picker when clicking elsewhere.
+  useEffect(() => {
+    if (!showEmoji) return undefined;
+    const onDown = (e) => {
+      if (inputRowRef.current && !inputRowRef.current.contains(e.target)) setShowEmoji(false);
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [showEmoji]);
+
+  // Jump straight into typing when replying.
+  useEffect(() => {
+    if (replyTo) textareaRef.current?.focus();
+  }, [replyTo]);
+
   // ---- Files -------------------------------------------------------
 
   const stageFiles = useCallback(
@@ -780,6 +900,54 @@ const MessageInput = ({
     }
   };
 
+  // ---- Submit and keyboard ----------------------------------------
+
+  const submit = async () => {
+    if (disabled || uploading) return;
+
+    // Files take priority; the typed text becomes the first file's caption.
+    if (stagedRef.current.length) {
+      stopTyping();
+      setShowEmoji(false);
+      await sendStaged();
+      return;
+    }
+
+    const trimmed = text.trim();
+    if (!trimmed) return;
+
+    const sent = onSend({
+      type: "text",
+      text: trimmed,
+      replyTo: replyTo?._id || null,
+    });
+
+    // Keep the draft if the message could not be sent (e.g. offline).
+    if (sent === false) return;
+
+    clearDraft();
+    onCancelReply?.();
+    stopTyping();
+    setShowEmoji(false);
+    pulse();
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.nativeEvent.isComposing) return;
+
+    if (e.key === "Enter" && !e.shiftKey && !isMobile) {
+      e.preventDefault();
+      submit();
+      return;
+    }
+
+    if (e.key === "Escape") {
+      if (showEmoji) setShowEmoji(false);
+      else if (replyTo) onCancelReply?.();
+    }
+  };
+
   // ---- Composer state ---------------------------------------------
 
   const hasContent = text.trim().length > 0 || staged.length > 0;
@@ -1129,6 +1297,7 @@ const MessageInput = ({
               value={text}
               onChange={handleChange}
               onKeyDown={handleKeyDown}
+              onBlur={stopTyping}
               onPaste={handlePaste}
               rows={1}
               disabled={disabled}

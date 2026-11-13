@@ -32,7 +32,28 @@ const timeAgo = (date) => {
 // because of sub-pixel scroll rounding.
 const BOTTOM_THRESHOLD = 120;
 
-const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, onConversationUpdate, onOpenMoment, loadingConversation }) => {
+const dayKey = (date) => {
+  const d = new Date(date);
+  return Number.isNaN(d.getTime()) ? "" : `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+};
+
+const dayLabel = (date) => {
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return "";
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+  if (dayKey(d) === dayKey(today)) return "Today";
+  if (dayKey(d) === dayKey(yesterday)) return "Yesterday";
+  return d.toLocaleDateString([], {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    ...(d.getFullYear() !== today.getFullYear() ? { year: "numeric" } : {}),
+  });
+};
+
+const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, onOpenMoment, loadingConversation }) => {
   const { user } = useAuth();
   const { socket, connectionState } = useSocket();
   const { startCall, callState } = useCall();
@@ -45,7 +66,7 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadingOlder, setLoadingOlder] = useState(false);
-  const [hasMoreOlder, setHasMoreOlder] = useState(true);
+  const [, setHasMoreOlder] = useState(true);
   const [replyTo, setReplyTo] = useState(null);
   const [typingUsers, setTypingUsers] = useState(new Map());
   const [atBottom, setAtBottom] = useState(true);
@@ -498,6 +519,9 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
   const label = conversation.isGroup ? conversation.name : other?.name;
   const isOnline = other && onlineUserIds.has(String(other.id || other._id));
   const typingNames = Array.from(typingUsers.values());
+  const memberNames = Object.fromEntries(
+    (conversation.members || []).map((m) => [String(m.id || m._id), m.name])
+  );
 
   const send = (payload) => {
     const activeConversationId = conversationRef.current?._id;
@@ -523,7 +547,7 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
 
   const handleDeleteForMe = (message) => {
     socket?.emit("message:delete", { messageId: message._id, mode: "me" }, (res) => {
-      if (res?.error) return alert(res.error);
+      if (res?.error) return setSendError(res.error);
       setMessages((prev) => prev.filter((m) => m._id !== message._id));
     });
   };
@@ -532,8 +556,30 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
     socket?.emit("message:delete", { messageId: message._id, mode: "everyone" });
   };
 
+  // Optimistic: the reaction appears instantly and the server's
+  // "message:reaction" event then confirms (or corrects) it. Same emoji
+  // again removes it; a different one replaces it (one reaction per person).
   const handleReact = (message, emoji) => {
-    socket?.emit("message:react", { messageId: message._id, emoji });
+    if (!socket?.connected) {
+      setSendError("You're offline. Reconnecting — try again in a moment.");
+      return;
+    }
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m._id !== message._id) return m;
+        const list = m.reactions || [];
+        const mine = list.find((r) => String(r.user?._id || r.user?.id || r.user) === String(user.id));
+        const others = list.filter((r) => r !== mine);
+        const next = mine?.emoji === emoji ? others : [...others, { user: user.id, emoji }];
+        return { ...m, reactions: next };
+      })
+    );
+    socket.emit("message:react", { messageId: message._id, emoji }, (res) => {
+      if (res?.error) {
+        setSendError(res.error);
+        api.get(`/messages/${conversationRef.current?._id}`).then(({ data }) => mergeMessages(data.messages)).catch(() => {});
+      }
+    });
   };
 
   const handleEdit = (message, text) => {
@@ -541,11 +587,11 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
   };
 
   const handlePin = (message) => {
-    socket?.emit("message:pin", { messageId: message._id }, (res) => res?.error && alert(res.error));
+    socket?.emit("message:pin", { messageId: message._id }, (res) => res?.error && setSendError(res.error));
   };
 
   const handleUnpin = (message) => {
-    socket?.emit("message:unpin", { messageId: message._id }, (res) => res?.error && alert(res.error));
+    socket?.emit("message:unpin", { messageId: message._id }, (res) => res?.error && setSendError(res.error));
   };
 
   const wallpaper = mediaUrl(conversation.mySettings?.wallpaper);
@@ -715,6 +761,13 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
           <AnimatePresence initial={false}>
             {messages.map((m, i) => (
               <React.Fragment key={m._id}>
+                {(i === 0 || dayKey(messages[i - 1].createdAt) !== dayKey(m.createdAt)) && (
+                  <div className="sticky top-1 z-10 flex justify-center py-2 pointer-events-none">
+                    <span className="rounded-full bg-sidebar/90 border border-white/10 px-3 py-1 text-[11px] text-muted shadow-sm backdrop-blur">
+                      {dayLabel(m.createdAt)}
+                    </span>
+                  </div>
+                )}
                 {m._id === firstUnreadId && (
                   <div className="flex items-center gap-3 px-6 py-2">
                     <div className="flex-1 h-px bg-ember/30" />
@@ -728,6 +781,7 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
                   isGroup={conversation.isGroup}
                   currentUserId={user.id}
                   memberCount={conversation.members.length}
+                  memberNames={memberNames}
                   showSender={conversation.isGroup && (i === 0 || (messages[i - 1].sender?._id || messages[i - 1].sender) !== (m.sender?._id || m.sender))}
                   highlighted={highlightedId === m._id}
                   highlightTerm={showSearch ? searchQuery.trim() : ""}
@@ -753,15 +807,17 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
       </div>
 
       <AnimatePresence>
-        {!atBottom && newMessageCount > 0 && (
+        {!atBottom && (
           <motion.button
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 12 }}
             onClick={scrollToBottom}
+            aria-label="Scroll to latest message"
             className="absolute bottom-28 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 bg-ember text-bg text-xs font-medium px-4 py-2 rounded-full shadow-lg"
           >
-            <ArrowDown size={14} /> {newMessageCount} New Message{newMessageCount > 1 ? "s" : ""}
+            <ArrowDown size={14} />{" "}
+            {newMessageCount > 0 ? `${newMessageCount} new message${newMessageCount > 1 ? "s" : ""}` : "Jump to latest"}
           </motion.button>
         )}
       </AnimatePresence>

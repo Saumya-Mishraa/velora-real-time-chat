@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect, useLayoutEffect } from "react";
-import { motion } from "framer-motion";
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   Check,
   CheckCheck,
@@ -7,6 +7,8 @@ import {
   Trash2,
   Copy,
   Smile,
+  MoreHorizontal,
+  ChevronLeft,
   FileText,
   FileArchive,
   FileSpreadsheet,
@@ -48,12 +50,6 @@ const getId = (value) => {
 };
 
 const formatSize = (bytes = 0) => fmtBytes(bytes);
-
-const formatDuration = (seconds = 0) => {
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${String(s).padStart(2, "0")}`;
-};
 
 const fileIconFor = (mimeType = "") => {
   if (mimeType.startsWith("image/")) return FileImage;
@@ -308,12 +304,217 @@ const StatusReplyCard = ({ reply }) => (
   </div>
 );
 
+// ---------------------------------------------------------------------
+// Reaction + actions popover
+// ---------------------------------------------------------------------
+
+const useIsTouch = () => {
+  const query = "(hover: none)";
+  const [touch, setTouch] = useState(
+    () => typeof window !== "undefined" && !!window.matchMedia?.(query).matches
+  );
+  useEffect(() => {
+    const mq = window.matchMedia?.(query);
+    if (!mq) return undefined;
+    const onChange = () => setTouch(mq.matches);
+    mq.addEventListener?.("change", onChange);
+    return () => mq.removeEventListener?.("change", onChange);
+  }, []);
+  return touch;
+};
+
+const copyToClipboard = async (text) => {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // Clipboard API needs a secure context; fall back for plain http.
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+};
+
+// A fixed-position popover that follows its anchor while the chat scrolls
+// and always stays inside the visible message area (never under the header
+// or the composer, never off-screen on a 320px phone).
+const MenuPopover = ({ anchorRef, isOwn, onClose, label, contentKey, children }) => {
+  const popRef = useRef(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  const [pos, setPos] = useState(null);
+
+  const place = useCallback(() => {
+    const anchor = anchorRef.current;
+    const pop = popRef.current;
+    if (!anchor || !pop) return;
+    const a = anchor.getBoundingClientRect();
+    const p = pop.getBoundingClientRect();
+    const scroller = anchor.closest(".chat-scroll");
+    const bounds = scroller ? scroller.getBoundingClientRect() : { top: 0, bottom: window.innerHeight };
+    // The message scrolled completely out of view: nothing left to point at.
+    if (a.bottom < bounds.top || a.top > bounds.bottom) {
+      closeRef.current();
+      return;
+    }
+    const margin = 8;
+    const minTop = Math.max(bounds.top, 0) + margin;
+    const maxBottom = Math.min(bounds.bottom, window.innerHeight) - margin;
+
+    let left = isOwn ? a.right - p.width : a.left;
+    left = Math.min(Math.max(left, margin), window.innerWidth - p.width - margin);
+
+    let top = a.top - p.height - 6; // prefer above the message
+    if (top < minTop) top = a.bottom + 6; // otherwise below it
+    if (top + p.height > maxBottom) top = Math.max(minTop, maxBottom - p.height);
+
+    setPos((prev) => (prev && prev.top === top && prev.left === left ? prev : { top, left }));
+  }, [anchorRef, isOwn]);
+
+  // Measure first (hidden), then place. Re-place when the content changes size.
+  useLayoutEffect(() => {
+    place();
+  }, [place, contentKey]);
+
+  useEffect(() => {
+    let raf = 0;
+    const schedule = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(place);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        closeRef.current();
+      }
+    };
+    window.addEventListener("scroll", schedule, true);
+    window.addEventListener("resize", schedule);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("scroll", schedule, true);
+      window.removeEventListener("resize", schedule);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [place]);
+
+  // Move keyboard focus into the popover once it is placed.
+  useEffect(() => {
+    if (pos) popRef.current?.querySelector("button")?.focus({ preventScroll: true });
+    // Only on first placement of each view.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pos === null, contentKey]);
+
+  return (
+    <>
+      <div
+        className="fixed inset-0 z-40"
+        onPointerDown={(e) => {
+          e.stopPropagation();
+          onClose();
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onClose();
+        }}
+        aria-hidden="true"
+      />
+      <motion.div
+        ref={popRef}
+        role="menu"
+        aria-label={label}
+        initial={{ opacity: 0, y: 4 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.12 }}
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          position: "fixed",
+          top: pos?.top ?? 0,
+          left: pos?.left ?? 0,
+          visibility: pos ? "visible" : "hidden",
+        }}
+        className="z-50 w-max max-w-[calc(100vw-1rem)] rounded-2xl bg-sidebar border border-white/10 shadow-2xl overflow-hidden"
+      >
+        {children}
+      </motion.div>
+    </>
+  );
+};
+
+const MenuItem = ({ icon: Icon, children, onClick, danger = false }) => (
+  <button
+    type="button"
+    role="menuitem"
+    onClick={onClick}
+    className={`flex w-full items-center gap-3 px-4 min-h-[44px] sm:min-h-[38px] text-sm text-left outline-none transition-colors hover:bg-white/5 focus-visible:bg-white/10 ${
+      danger ? "text-red-400" : "text-ink"
+    }`}
+  >
+    <Icon size={16} className={danger ? "" : "text-muted"} />
+    <span>{children}</span>
+  </button>
+);
+
+const ReactionPill = ({ reaction, names, onToggle }) => {
+  const who = names.length ? names.join(", ") : "";
+  return (
+    <motion.button
+      type="button"
+      layout="position"
+      initial={{ scale: 0.4, opacity: 0 }}
+      animate={{ scale: 1, opacity: 1 }}
+      exit={{ scale: 0.4, opacity: 0 }}
+      whileTap={{ scale: 0.9 }}
+      transition={{ type: "spring", stiffness: 520, damping: 22 }}
+      onClick={(event) => {
+        event.stopPropagation();
+        onToggle(reaction.emoji);
+      }}
+      aria-pressed={reaction.mine}
+      aria-label={`${reaction.emoji} ${reaction.count} ${reaction.count === 1 ? "reaction" : "reactions"}${
+        who ? ` from ${who}` : ""
+      }. ${reaction.mine ? "Press to remove yours" : "Press to add yours"}`}
+      title={`${who ? `${who} · ` : ""}${reaction.mine ? "Click to remove your reaction" : "Click to react too"}`}
+      className={`inline-flex items-center justify-center gap-1 h-7 min-w-[2rem] px-2 rounded-full border text-[13px] leading-none shadow-sm transition-colors ${
+        reaction.mine
+          ? "bg-ember/20 border-ember/60 text-ink"
+          : "bg-sidebar border-white/10 text-ink hover:border-white/30"
+      }`}
+    >
+      <span className="text-[15px] leading-none">{reaction.emoji}</span>
+      {reaction.count > 1 && (
+        <motion.span
+          key={reaction.count}
+          initial={{ y: -6, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          className="tabular-nums text-xs opacity-80"
+        >
+          {reaction.count}
+        </motion.span>
+      )}
+    </motion.button>
+  );
+};
+
 const MessageBubble = ({
   message,
   isOwn,
   isGroup,
   currentUserId,
   memberCount,
+  memberNames,
   onReply,
   onDeleteForMe,
   onDeleteForEveryone,
@@ -330,89 +531,50 @@ const MessageBubble = ({
   isCurrentMatch = false,
   onOpenMoment,
 }) => {
-  const [showActions, setShowActions] = useState(false);
-  const [showReactions, setShowReactions] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuView, setMenuView] = useState("main"); // "main" | "delete"
+  const [copied, setCopied] = useState(false);
+  const [heartBurst, setHeartBurst] = useState(0);
   const [imgLoaded, setImgLoaded] = useState(false);
   const [imgError, setImgError] = useState(false);
   const [imageRetry, setImageRetry] = useState(0);
   const [lightboxSrc, setLightboxSrc] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState(message.text || "");
-  const [showDeleteMenu, setShowDeleteMenu] = useState(false);
-  // Fixed-position coords for the "..." actions menu, computed in the
-  // layout effect below. null until measured, so the menu renders once
-  // off-screen (invisible) to get its real size before being placed —
-  // see the root-cause note on that effect.
-  const [menuPos, setMenuPos] = useState(null);
 
-  const bubbleRef = useRef(null);
-  const triggerRef = useRef(null);
-  const actionsRef = useRef(null);
+  const isTouch = useIsTouch();
+  const rowRef = useRef(null);
+  const anchorRef = useRef(null);
+  const moreBtnRef = useRef(null);
+  const copyTimer = useRef(null);
+  // Only messages that arrive live get the entrance animation; history that
+  // is loaded or prepended while scrolling should not all animate at once.
+  const isFresh = useRef(Date.now() - new Date(message.createdAt || 0).getTime() < 4000);
 
   useEffect(() => {
     if (!isEditing) setEditText(message.text || "");
   }, [message.text, isEditing]);
 
   useEffect(() => {
-    if (highlighted && bubbleRef.current) {
-      bubbleRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (highlighted && rowRef.current) {
+      rowRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
     }
   }, [highlighted]);
 
-  // Root cause of the actions menu ("...", React/Reply/Edit/Pin/Info/
-  // Delete) overflowing or getting cut off on phones: it used to be
-  // `position: absolute`, anchored to the message bubble's own left/right
-  // edge. For a short message sitting near the edge of a narrow screen,
-  // the pill of ~6-7 icon buttons simply didn't fit in the remaining
-  // horizontal space, and the chat scroll container's overflow-x-hidden
-  // (needed elsewhere to stop the page itself from scrolling sideways)
-  // then silently clipped whatever spilled past the viewport edge.
-  //
-  // Fix: render it `position: fixed` instead, measure its own size once
-  // it mounts, and clamp its left/top so it's always fully on-screen —
-  // with an 8px margin — regardless of where the message bubble sits or
-  // how small the screen is. This touches positioning only; the pill's
-  // existing visual design (colors, icon buttons, spacing) is unchanged.
-  useLayoutEffect(() => {
-    if (!showActions) {
-      setMenuPos(null);
-      return;
-    }
-    const place = () => {
-      const trigger = triggerRef.current;
-      const menu = actionsRef.current;
-      if (!trigger || !menu) return;
-      const triggerRect = trigger.getBoundingClientRect();
-      const menuRect = menu.getBoundingClientRect();
-      const margin = 8;
+  useEffect(() => () => clearTimeout(copyTimer.current), []);
 
-      let left = isOwn ? triggerRect.right - menuRect.width : triggerRect.left;
-      left = Math.min(Math.max(left, margin), window.innerWidth - menuRect.width - margin);
+  const closeMenu = useCallback((restoreFocus = false) => {
+    setMenuOpen(false);
+    setMenuView("main");
+    setCopied(false);
+    if (restoreFocus) moreBtnRef.current?.focus({ preventScroll: true });
+  }, []);
 
-      let top = triggerRect.top - menuRect.height - margin;
-      if (top < margin) top = Math.min(triggerRect.bottom + margin, window.innerHeight - menuRect.height - margin);
-
-      setMenuPos({ top, left });
-    };
-
-    // First paint: the menu is in the DOM (see the `visibility` style
-    // below) but not yet positioned, so its real width/height can be
-    // measured. Then place it for real.
-    place();
-
-    // Close rather than leave a stale position behind if the page
-    // scrolls or resizes while the menu is open. Scroll events don't
-    // bubble, so a capturing window listener is what catches scrolling
-    // on the chat's own scroll container (or any ancestor), not just
-    // the window itself.
-    const close = () => setShowActions(false);
-    window.addEventListener("scroll", close, true);
-    window.addEventListener("resize", close);
-    return () => {
-      window.removeEventListener("scroll", close, true);
-      window.removeEventListener("resize", close);
-    };
-  }, [showActions, isOwn]);
+  const openMenu = useCallback(() => {
+    setMenuView("main");
+    setCopied(false);
+    setMenuOpen(true);
+  }, []);
 
   if (message.deletedForEveryone || message.deleted) {
     return (
@@ -427,8 +589,6 @@ const MessageBubble = ({
     );
   }
 
-  const FileIcon = fileIconFor(message.attachment?.mimeType);
-
   // Ticks: single grey (sent) -> double grey (delivered) -> double
   // colored (seen). Group chats only show "seen" once every other
   // member has read it; otherwise stay at delivered.
@@ -440,26 +600,34 @@ const MessageBubble = ({
   const seenCount = (message.readBy || []).filter(
     (user) => getId(user) !== normalizedCurrentUserId
   ).length;
-
-  // The API stores one reaction per user. Group them for a compact,
-  // readable reaction strip and highlight the current user's selection.
-  const reactionSummary = (message.reactions || []).reduce((summary, reaction) => {
-    if (!reaction?.emoji) return summary;
-    const existing = summary.find((item) => item.emoji === reaction.emoji);
-    if (existing) {
-      existing.count += 1;
-      if (normalizedCurrentUserId && getId(reaction.user) === normalizedCurrentUserId) existing.mine = true;
-    } else {
-      summary.push({
-        emoji: reaction.emoji,
-        count: 1,
-        mine: Boolean(normalizedCurrentUserId) && getId(reaction.user) === normalizedCurrentUserId,
-      });
-    }
-    return summary;
-  }, []);
   const isDelivered = deliveredCount > 0;
   const isSeen = isGroup ? seenCount >= othersCount && othersCount > 0 : seenCount > 0;
+
+  // The API stores one reaction per user. Group them for a compact strip,
+  // remember who reacted (for tooltips) and which one is mine.
+  const nameFor = (reaction) => {
+    const id = getId(reaction.user);
+    if (normalizedCurrentUserId && id === normalizedCurrentUserId) return "You";
+    return memberNames?.[id] || reaction.user?.name || "Someone";
+  };
+  const reactionSummary = [];
+  (message.reactions || []).forEach((reaction) => {
+    if (!reaction?.emoji) return;
+    let entry = reactionSummary.find((item) => item.emoji === reaction.emoji);
+    if (!entry) {
+      entry = { emoji: reaction.emoji, count: 0, mine: false, names: [] };
+      reactionSummary.push(entry);
+    }
+    entry.count += 1;
+    const name = nameFor(reaction);
+    if (name === "You") {
+      entry.mine = true;
+      entry.names.unshift(name);
+    } else {
+      entry.names.push(name);
+    }
+  });
+  const myReaction = reactionSummary.find((item) => item.mine)?.emoji || null;
 
   const commitEdit = () => {
     const trimmed = editText.trim();
@@ -467,46 +635,77 @@ const MessageBubble = ({
     setIsEditing(false);
   };
 
+  const react = (emoji) => {
+    onReact?.(message, emoji);
+  };
+
+  const pickReaction = (emoji) => {
+    react(emoji);
+    closeMenu(true);
+  };
+
+  const handleCopy = async () => {
+    const ok = await copyToClipboard(message.text || "");
+    setCopied(ok);
+    clearTimeout(copyTimer.current);
+    copyTimer.current = setTimeout(() => closeMenu(true), ok ? 700 : 0);
+  };
+
+  const interactiveTarget = (target) =>
+    !!target?.closest?.("a, button, video, audio, textarea, input");
+
+  // Desktop: double-click sends a quick heart. Right-click opens the menu
+  // (unless the person is selecting text or right-clicking a link).
+  const handleDoubleClick = (e) => {
+    if (isTouch || interactiveTarget(e.target) || isEditing) return;
+    window.getSelection?.()?.removeAllRanges();
+    if (myReaction !== "❤️") react("❤️");
+    setHeartBurst((n) => n + 1);
+  };
+
+  const handleContextMenu = (e) => {
+    if (isEditing || interactiveTarget(e.target)) return;
+    if (window.getSelection?.()?.toString()) return;
+    e.preventDefault();
+    openMenu();
+  };
+
+  const handleBubbleClick = (e) => {
+    // Touch screens have no hover, so a tap opens the reactions + actions.
+    if (!isTouch || isEditing || interactiveTarget(e.target)) return;
+    openMenu();
+  };
+
+  const handleBubbleKeyDown = (e) => {
+    if (e.target !== e.currentTarget) return;
+    if (e.key === "Enter" || e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) {
+      e.preventDefault();
+      openMenu();
+    }
+  };
+
+  const canCopy = Boolean(message.text) && message.type !== "call";
+  const canEdit = isOwn && message.type === "text" && !message.shared;
+
   return (
-    <motion.div
-      layout
+    <div
       id={`message-${message._id}`}
-      ref={bubbleRef}
-      initial={{ opacity: 0, y: 12, scale: 0.98 }}
-      animate={{
-        opacity: 1,
-        y: 0,
-        scale: 1,
-        backgroundColor: highlighted ? "rgba(255,184,107,0.12)" : "rgba(0,0,0,0)",
-      }}
-      transition={{ type: "spring", stiffness: 400, damping: 32 }}
-      className={`flex ${isOwn ? "justify-end" : "justify-start"} px-3 sm:px-4 py-1 group rounded-xl`}
-      onMouseEnter={() => setShowActions(true)}
-      onMouseLeave={() => {
-        setShowActions(false);
-        setShowReactions(false);
-      }}
+      ref={rowRef}
+      className={`flex ${isOwn ? "justify-end" : "justify-start"} px-3 sm:px-4 py-1 group rounded-xl transition-colors duration-700 ${
+        highlighted ? "bg-amber/10" : "bg-transparent"
+      }`}
     >
-      <div
+      <motion.div
+        initial={isFresh.current ? { opacity: 0, y: 10, scale: 0.98 } : false}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ type: "spring", stiffness: 420, damping: 32 }}
         className={`flex items-end gap-2 min-w-0 max-w-[88%] sm:max-w-[75%] lg:max-w-[65%] ${
           isOwn ? "flex-row-reverse" : ""
         }`}
       >
         {!isOwn && showSender && <Avatar name={message.sender?.name} size={28} />}
 
-        <div
-          ref={triggerRef}
-          className="relative min-w-0"
-          onClick={() => {
-            // Hover devices reveal actions on pointer entry. On touch devices,
-            // a tap toggles the toolbar because there is no hover state.
-            if (window.matchMedia?.("(hover: none)").matches) {
-              setShowActions((visible) => !visible);
-              setShowDeleteMenu(false);
-              setShowReactions(false);
-            }
-          }}
-        >
+        <div className="relative min-w-0">
           {!isOwn && isGroup && showSender && (
             <p className="text-xs text-ember/80 font-medium px-1 mb-0.5">{message.sender?.name}</p>
           )}
@@ -533,298 +732,285 @@ const MessageBubble = ({
             </button>
           )}
 
-          <div
-            className={`rounded-2xl px-3.5 py-2 sm:px-4 min-w-0 break-words ${
-              isOwn ? "bg-ember text-bg rounded-br-sm" : "bg-chat border border-white/5 text-ink rounded-bl-sm"
-            } ${isCurrentMatch ? "ring-2 ring-amber" : isMatch ? "ring-1 ring-amber/50" : ""}`}
-          >
-            {message.type === "image" && message.attachment?.url && (
-              imgError ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setImgError(false);
-                    setImgLoaded(false);
-                    setImageRetry((attempt) => attempt + 1);
-                  }}
-                  className={`w-full max-w-[240px] sm:max-w-xs flex flex-col items-center justify-center gap-1.5 rounded-lg mb-1 py-6 text-center ${
-                    isOwn ? "bg-black/15" : "bg-black/20"
-                  }`}
-                >
-                  <ImageOff size={22} className="opacity-70" />
-                  <span className="text-xs opacity-80">Image failed to load — tap to retry</span>
-                </button>
-              ) : (
-                <div className="relative w-full max-w-[240px] sm:max-w-xs mb-1">
-                  {!imgLoaded && (
-                    <div className="absolute inset-0 rounded-lg bg-black/10 animate-pulse" style={{ aspectRatio: "4 / 3" }} />
-                  )}
-                  <motion.img
-                    key={`${message._id || "image"}-${imageRetry}`}
-                    src={mediaUrl(message.attachment.url)}
-                    alt={message.attachment.name || "Shared image"}
-                    onLoad={() => setImgLoaded(true)}
-                    onError={() => setImgError(true)}
+          {/* Bubble + its hover toolbar. This wrapper is the popover's anchor. */}
+          <div ref={anchorRef} className="relative">
+            <div
+              tabIndex={0}
+              onClick={handleBubbleClick}
+              onDoubleClick={handleDoubleClick}
+              onContextMenu={handleContextMenu}
+              onKeyDown={handleBubbleKeyDown}
+              aria-label={`${isOwn ? "Your" : `${message.sender?.name || "Their"}`} message. Press Enter for reactions and actions.`}
+              style={isTouch ? { WebkitTouchCallout: "none", WebkitUserSelect: "none", userSelect: "none" } : undefined}
+              className={`relative rounded-2xl px-3.5 py-2 sm:px-4 min-w-0 break-words outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-ember/70 ${
+                isOwn ? "bg-ember text-bg rounded-br-sm" : "bg-chat border border-white/5 text-ink rounded-bl-sm"
+              } ${isCurrentMatch ? "ring-2 ring-amber" : isMatch ? "ring-1 ring-amber/50" : ""}`}
+            >
+              {message.type === "image" && message.attachment?.url && (
+                imgError ? (
+                  <button
+                    type="button"
                     onClick={(e) => {
                       e.stopPropagation();
-                      setLightboxSrc(mediaUrl(message.attachment.url));
+                      setImgError(false);
+                      setImgLoaded(false);
+                      setImageRetry((attempt) => attempt + 1);
                     }}
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: imgLoaded ? 1 : 0 }}
-                    transition={{ duration: 0.35 }}
-                    className="w-full h-auto rounded-lg cursor-zoom-in object-cover"
-                    loading="lazy"
-                  />
-                </div>
-              )
-            )}
+                    className={`w-full max-w-[240px] sm:max-w-xs flex flex-col items-center justify-center gap-1.5 rounded-lg mb-1 py-6 text-center ${
+                      isOwn ? "bg-black/15" : "bg-black/20"
+                    }`}
+                  >
+                    <ImageOff size={22} className="opacity-70" />
+                    <span className="text-xs opacity-80">Image failed to load — tap to retry</span>
+                  </button>
+                ) : (
+                  <div className="relative w-full max-w-[240px] sm:max-w-xs mb-1">
+                    {!imgLoaded && (
+                      <div className="absolute inset-0 rounded-lg bg-black/10 animate-pulse" style={{ aspectRatio: "4 / 3" }} />
+                    )}
+                    <motion.img
+                      key={`${message._id || "image"}-${imageRetry}`}
+                      src={mediaUrl(message.attachment.url)}
+                      alt={message.attachment.name || "Shared image"}
+                      onLoad={() => setImgLoaded(true)}
+                      onError={() => setImgError(true)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setLightboxSrc(mediaUrl(message.attachment.url));
+                      }}
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: imgLoaded ? 1 : 0 }}
+                      transition={{ duration: 0.35 }}
+                      className="w-full h-auto rounded-lg cursor-zoom-in object-cover"
+                      loading="lazy"
+                    />
+                  </div>
+                )
+              )}
 
-            {message.type === "call" && <CallRecord message={message} isOwn={isOwn} />}
+              {message.type === "call" && <CallRecord message={message} isOwn={isOwn} />}
 
-            {message.statusReply?.statusId && <StatusReplyCard reply={message.statusReply} />}
+              {message.statusReply?.statusId && <StatusReplyCard reply={message.statusReply} />}
 
-            {message.shared?.kind === "moment" && <SharedMoment shared={message.shared} isOwn={isOwn} onOpen={onOpenMoment} />}
+              {message.shared?.kind === "moment" && <SharedMoment shared={message.shared} isOwn={isOwn} onOpen={onOpenMoment} />}
 
-            {message.type === "voice" && message.attachment?.url && (
-              <VoicePlayer src={mediaUrl(message.attachment.url)} duration={message.attachment.duration} isOwn={isOwn} />
-            )}
+              {message.type === "voice" && message.attachment?.url && (
+                <VoicePlayer src={mediaUrl(message.attachment.url)} duration={message.attachment.duration} isOwn={isOwn} />
+              )}
 
-            {message.type === "video" && message.attachment?.url && (
-              <video
-                src={mediaUrl(message.attachment.url)}
-                controls
-                playsInline
-                preload="metadata"
-                onClick={(e) => e.stopPropagation()}
-                className="w-[240px] max-w-full sm:w-[300px] max-h-[320px] rounded-lg mb-1 bg-black"
-              />
-            )}
-
-            {message.type === "audio" && message.attachment?.url && (
-              <div className="mb-1 w-[240px] max-w-full sm:w-[280px]" onClick={(e) => e.stopPropagation()}>
-                <p className="text-xs truncate opacity-80 mb-1" title={message.attachment.name}>{message.attachment.name}</p>
-                <audio src={mediaUrl(message.attachment.url)} controls preload="metadata" className="w-full h-9" />
-              </div>
-            )}
-
-            {message.type === "file" && message.attachment?.url && (
-              <FileCard attachment={message.attachment} isOwn={isOwn} />
-            )}
-
-            {isEditing ? (
-              <div onClick={(e) => e.stopPropagation()} className="flex flex-col gap-1.5">
-                <textarea
-                  autoFocus
-                  value={editText}
-                  onChange={(e) => setEditText(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      commitEdit();
-                    }
-                    if (e.key === "Escape") setIsEditing(false);
-                  }}
-                  rows={2}
-                  className="bg-black/15 rounded-lg px-2 py-1 outline-none resize-none text-sm w-56 sm:w-64"
+              {message.type === "video" && message.attachment?.url && (
+                <video
+                  src={mediaUrl(message.attachment.url)}
+                  controls
+                  playsInline
+                  preload="metadata"
+                  onClick={(e) => e.stopPropagation()}
+                  className="w-[240px] max-w-full sm:w-[300px] max-h-[320px] rounded-lg mb-1 bg-black"
                 />
-                <div className="flex gap-2 text-xs">
-                  <button onClick={commitEdit} className="underline">Save</button>
-                  <button onClick={() => setIsEditing(false)} className="underline opacity-70">Cancel</button>
-                </div>
-              </div>
-            ) : (
-              message.text && message.type !== "call" && !(message.shared?.kind === "moment") && (
-                <p className="whitespace-pre-wrap break-words">
-                  <Linkified text={message.text} term={highlightTerm} isOwn={isOwn} />
-                </p>
-              )
-            )}
+              )}
 
-            <div
-              className={`flex items-center gap-1 mt-1 text-[10px] ${
-                isOwn ? "text-bg/70 justify-end" : "text-muted"
-              }`}
-            >
-              {message.edited && <span className="italic">edited</span>}
-              <span>{formatTime(message.createdAt)}</span>
-              {isOwn && (isSeen ? <CheckCheck size={12} className="text-blue-200" /> : isDelivered ? <CheckCheck size={12} /> : <Check size={12} />)}
+              {message.type === "audio" && message.attachment?.url && (
+                <div className="mb-1 w-[240px] max-w-full sm:w-[280px]" onClick={(e) => e.stopPropagation()}>
+                  <p className="text-xs truncate opacity-80 mb-1" title={message.attachment.name}>{message.attachment.name}</p>
+                  <audio src={mediaUrl(message.attachment.url)} controls preload="metadata" className="w-full h-9" />
+                </div>
+              )}
+
+              {message.type === "file" && message.attachment?.url && (
+                <FileCard attachment={message.attachment} isOwn={isOwn} />
+              )}
+
+              {isEditing ? (
+                <div onClick={(e) => e.stopPropagation()} className="flex flex-col gap-1.5">
+                  <textarea
+                    autoFocus
+                    value={editText}
+                    onFocus={(e) => e.target.setSelectionRange(e.target.value.length, e.target.value.length)}
+                    onChange={(e) => setEditText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                        e.preventDefault();
+                        commitEdit();
+                      }
+                      if (e.key === "Escape") setIsEditing(false);
+                    }}
+                    rows={2}
+                    aria-label="Edit message"
+                    className="bg-black/15 rounded-lg px-2 py-1 outline-none resize-none text-base sm:text-sm w-56 sm:w-64 max-w-full"
+                  />
+                  <div className="flex gap-1 text-xs">
+                    <button onClick={commitEdit} className="px-2.5 min-h-[32px] rounded-full bg-black/20 font-medium hover:bg-black/30">Save</button>
+                    <button onClick={() => setIsEditing(false)} className="px-2.5 min-h-[32px] rounded-full opacity-80 hover:bg-black/10">Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                message.text && message.type !== "call" && !(message.shared?.kind === "moment") && (
+                  <p className="whitespace-pre-wrap break-words">
+                    <Linkified text={message.text} term={highlightTerm} isOwn={isOwn} />
+                  </p>
+                )
+              )}
+
+              <div
+                className={`flex items-center gap-1 mt-1 text-[10px] ${
+                  isOwn ? "text-bg/70 justify-end" : "text-muted"
+                }`}
+              >
+                {message.edited && <span className="italic">edited</span>}
+                <span>{formatTime(message.createdAt)}</span>
+                {isOwn && (isSeen ? <CheckCheck size={12} className="text-blue-200" aria-label="Seen" /> : isDelivered ? <CheckCheck size={12} aria-label="Delivered" /> : <Check size={12} aria-label="Sent" />)}
+              </div>
+
+              {/* Double-click heart burst */}
+              <AnimatePresence>
+                {heartBurst > 0 && (
+                  <motion.span
+                    key={heartBurst}
+                    initial={{ scale: 0.3, opacity: 0.95 }}
+                    animate={{ scale: 1.8, opacity: 0 }}
+                    transition={{ duration: 0.7, ease: "easeOut" }}
+                    onAnimationComplete={() => setHeartBurst(0)}
+                    className="pointer-events-none absolute inset-0 flex items-center justify-center text-3xl"
+                    aria-hidden="true"
+                  >
+                    ❤️
+                  </motion.span>
+                )}
+              </AnimatePresence>
             </div>
+
+            {/* Hover toolbar (devices with a pointer). Stays reachable by keyboard. */}
+            {!isTouch && !isEditing && (
+              <div
+                className={`absolute top-1/2 -translate-y-1/2 ${isOwn ? "right-full mr-1.5" : "left-full ml-1.5"} flex items-center gap-0.5 rounded-full bg-sidebar/95 border border-white/10 p-0.5 shadow-lg transition-opacity duration-150 ${
+                  menuOpen ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-within:opacity-100"
+                }`}
+              >
+                <button
+                  type="button"
+                  onClick={openMenu}
+                  title="React"
+                  aria-label="React to message"
+                  className="w-8 h-8 flex items-center justify-center rounded-full text-muted hover:text-amber hover:bg-white/10 transition-colors"
+                >
+                  <Smile size={16} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onReply?.(message)}
+                  title="Reply"
+                  aria-label="Reply"
+                  className="w-8 h-8 flex items-center justify-center rounded-full text-muted hover:text-ember hover:bg-white/10 transition-colors"
+                >
+                  <Reply size={16} />
+                </button>
+                <button
+                  ref={moreBtnRef}
+                  type="button"
+                  onClick={openMenu}
+                  aria-haspopup="menu"
+                  aria-expanded={menuOpen}
+                  title="More"
+                  aria-label="More actions"
+                  className="w-8 h-8 flex items-center justify-center rounded-full text-muted hover:text-ink hover:bg-white/10 transition-colors"
+                >
+                  <MoreHorizontal size={16} />
+                </button>
+              </div>
+            )}
           </div>
 
           {reactionSummary.length > 0 && (
-            <div className={`flex flex-wrap gap-1 mt-1 ${isOwn ? "justify-end" : "justify-start"}`}>
-              {reactionSummary.map((reaction) => (
-                <motion.button
-                  key={reaction.emoji}
-                  type="button"
-                  initial={{ scale: 0, rotate: -15 }}
-                  animate={{ scale: 1, rotate: 0 }}
-                  whileTap={{ scale: 0.92 }}
-                  transition={{ type: "spring", stiffness: 500, damping: 15 }}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onReact?.(message, reaction.emoji);
-                  }}
-                  aria-label={`${reaction.emoji}, ${reaction.count} ${reaction.count === 1 ? "reaction" : "reactions"}${reaction.mine ? ", yours" : ""}`}
-                  title={reaction.mine ? "Remove your reaction" : "React with this emoji"}
-                  className={`text-xs rounded-full px-1.5 py-0.5 border transition-colors ${
-                    reaction.mine
-                      ? "bg-ember/15 border-ember/50"
-                      : "bg-chat border-white/10 hover:border-white/25"
-                  }`}
-                >
-                  {reaction.emoji}{reaction.count > 1 && <span className="ml-1 opacity-75">{reaction.count}</span>}
-                </motion.button>
-              ))}
+            <div
+              className={`relative z-[1] -mt-1.5 mb-1 flex flex-wrap gap-1 px-2 ${isOwn ? "justify-end" : "justify-start"}`}
+              role="group"
+              aria-label="Reactions"
+            >
+              <AnimatePresence initial={false}>
+                {reactionSummary.map((reaction) => (
+                  <ReactionPill key={reaction.emoji} reaction={reaction} names={reaction.names} onToggle={react} />
+                ))}
+              </AnimatePresence>
             </div>
           )}
+        </div>
+      </motion.div>
 
-          {showActions && (
-            <motion.div
-              ref={actionsRef}
-              initial={{ opacity: 0, y: -4 }}
-              animate={{ opacity: 1, y: 0 }}
-              onClick={(e) => e.stopPropagation()}
-              style={{
-                position: "fixed",
-                top: menuPos?.top ?? 0,
-                left: menuPos?.left ?? 0,
-                visibility: menuPos ? "visible" : "hidden",
-              }}
-              className="flex items-center gap-1 bg-sidebar border border-white/10 rounded-full px-1.5 py-1 shadow-lg z-50 max-w-[calc(100vw-1rem)] flex-wrap"
-            >
-              <button
-                onClick={() => setShowReactions((s) => !s)}
-                className="p-1 rounded-full hover:bg-white/10 text-muted hover:text-ember transition"
-                title="React"
-                aria-label="React"
-              >
-                <Smile size={14} />
-              </button>
-              <button
-                onClick={() => { onReply?.(message); setShowActions(false); }}
-                className="p-1 rounded-full hover:bg-white/10 text-muted hover:text-ember transition"
-                title="Reply"
-                aria-label="Reply"
-              >
-                <Reply size={14} />
-              </button>
-              {message.text && message.type !== "call" && (
-                <button
-                  onClick={async () => {
-                  try {
-                    await navigator.clipboard?.writeText(message.text || "");
-                  } catch (error) {
-                    console.warn("Could not copy message text.", error);
-                  }
-                  setShowActions(false);
-                }}
-                  className="p-1 rounded-full hover:bg-white/10 text-muted hover:text-ember transition"
-                  title="Copy"
-                  aria-label="Copy text"
-                >
-                  <Copy size={14} />
-                </button>
-              )}
-              {isOwn && message.type === "text" && !message.shared && (
-                <button
-                  onClick={() => { setIsEditing(true); setShowActions(false); }}
-                  className="p-1 rounded-full hover:bg-white/10 text-muted hover:text-ember transition"
-                  title="Edit"
-                  aria-label="Edit message"
-                >
-                  <Pencil size={14} />
-                </button>
-              )}
-              <button
-                onClick={() => { message.pinned ? onUnpin?.(message) : onPin?.(message); setShowActions(false); }}
-                className="p-1 rounded-full hover:bg-white/10 text-muted hover:text-amber transition"
-                title={message.pinned ? "Unpin" : "Pin"}
-                aria-label={message.pinned ? "Unpin message" : "Pin message"}
-              >
-                {message.pinned ? <PinOff size={14} /> : <Pin size={14} />}
-              </button>
-              {isOwn && (
-                <button
-                  onClick={() => { onShowInfo?.(message); setShowActions(false); }}
-                  className="p-1 rounded-full hover:bg-white/10 text-muted hover:text-ember transition"
-                  title="Message info"
-                  aria-label="Message info"
-                >
-                  <Info size={14} />
-                </button>
-              )}
-              <div className="relative">
-                <button
-                  onClick={() => setShowDeleteMenu((s) => !s)}
-                  className="p-1 rounded-full hover:bg-white/10 text-muted hover:text-red-400 transition"
-                  title="Delete"
-                  aria-label="Delete message"
-                >
-                  <Trash2 size={14} />
-                </button>
-                {showDeleteMenu && (
-                  <motion.div
-                    initial={{ opacity: 0, scale: 0.9 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    className={`absolute top-8 ${isOwn ? "right-0" : "left-0"} bg-sidebar border border-white/10 rounded-xl shadow-lg py-1 text-xs whitespace-nowrap z-20`}
+      {menuOpen && (
+        <MenuPopover
+          anchorRef={anchorRef}
+          isOwn={isOwn}
+          onClose={() => closeMenu(true)}
+          label="Message actions"
+          contentKey={menuView}
+        >
+          {menuView === "main" ? (
+            <>
+              <div className="flex items-center gap-0.5 px-2 py-2" role="group" aria-label="Quick reactions">
+                {REACTIONS.map((emoji) => (
+                  <motion.button
+                    key={emoji}
+                    type="button"
+                    role="menuitem"
+                    whileHover={{ scale: 1.25 }}
+                    whileTap={{ scale: 0.9 }}
+                    transition={{ type: "spring", stiffness: 500, damping: 18 }}
+                    onClick={() => pickReaction(emoji)}
+                    aria-label={myReaction === emoji ? `Remove ${emoji} reaction` : `React with ${emoji}`}
+                    aria-pressed={myReaction === emoji}
+                    className={`w-10 h-10 sm:w-9 sm:h-9 rounded-full text-[22px] leading-none flex items-center justify-center outline-none focus-visible:bg-white/15 ${
+                      myReaction === emoji ? "bg-ember/25 ring-1 ring-ember/60" : "hover:bg-white/10"
+                    }`}
                   >
-                    <button
-                      onClick={() => {
-                        onDeleteForMe?.(message);
-                        setShowDeleteMenu(false);
-                        setShowActions(false);
-                      }}
-                      className="block w-full text-left px-3 py-1.5 hover:bg-white/5"
-                    >
-                      Delete for me
-                    </button>
-                    {isOwn && (
-                      <button
-                        onClick={() => {
-                          if (window.confirm("Delete this message for everyone?")) {
-                            onDeleteForEveryone?.(message);
-                          }
-                          setShowDeleteMenu(false);
-                          setShowActions(false);
-                        }}
-                        className="block w-full text-left px-3 py-1.5 hover:bg-white/5 text-red-400"
-                      >
-                        Delete for everyone
-                      </button>
-                    )}
-                  </motion.div>
+                    {emoji}
+                  </motion.button>
+                ))}
+              </div>
+              <div className="border-t border-white/10 py-1">
+                <MenuItem icon={Reply} onClick={() => { onReply?.(message); closeMenu(); }}>Reply</MenuItem>
+                {canCopy && (
+                  <MenuItem icon={Copy} onClick={handleCopy}>{copied ? "Copied" : "Copy text"}</MenuItem>
+                )}
+                {canEdit && (
+                  <MenuItem icon={Pencil} onClick={() => { setIsEditing(true); closeMenu(); }}>Edit</MenuItem>
+                )}
+                <MenuItem
+                  icon={message.pinned ? PinOff : Pin}
+                  onClick={() => { (message.pinned ? onUnpin : onPin)?.(message); closeMenu(); }}
+                >
+                  {message.pinned ? "Unpin" : "Pin"}
+                </MenuItem>
+                {isOwn && (
+                  <MenuItem icon={Info} onClick={() => { onShowInfo?.(message); closeMenu(); }}>Message info</MenuItem>
+                )}
+                <MenuItem icon={Trash2} danger onClick={() => setMenuView("delete")}>Delete…</MenuItem>
+              </div>
+            </>
+          ) : (
+            <div className="py-1 min-w-[220px]">
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => setMenuView("main")}
+                className="flex w-full items-center gap-2 px-3 min-h-[40px] text-xs text-muted text-left outline-none hover:bg-white/5 focus-visible:bg-white/10"
+              >
+                <ChevronLeft size={14} /> Delete this message?
+              </button>
+              <div className="border-t border-white/10 mt-1 pt-1">
+                <MenuItem icon={Trash2} onClick={() => { onDeleteForMe?.(message); closeMenu(); }}>Delete for me</MenuItem>
+                {isOwn && (
+                  <MenuItem icon={Trash2} danger onClick={() => { onDeleteForEveryone?.(message); closeMenu(); }}>
+                    Delete for everyone
+                  </MenuItem>
                 )}
               </div>
-
-              {showReactions && (
-                <motion.div
-                  initial={{ opacity: 0, scale: 0.8 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  className={`absolute -top-10 ${isOwn ? "right-0" : "left-0"} flex gap-1 bg-sidebar border border-white/10 rounded-full px-2 py-1 max-w-[calc(100vw-1rem)]`}
-                >
-                  {REACTIONS.map((emoji) => (
-                    <button
-                      key={emoji}
-                      onClick={() => {
-                        onReact?.(message, emoji);
-                        setShowReactions(false);
-                        setShowActions(false);
-                      }}
-                      className="hover:scale-125 transition-transform"
-                    >
-                      {emoji}
-                    </button>
-                  ))}
-                </motion.div>
-              )}
-            </motion.div>
+            </div>
           )}
-        </div>
-      </div>
+        </MenuPopover>
+      )}
 
       <ImageLightbox src={lightboxSrc} alt={message.attachment?.name} onClose={() => setLightboxSrc(null)} />
-    </motion.div>
+    </div>
   );
 };
 
