@@ -128,6 +128,7 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
     loadingOlderRef.current = false;
     setNewMessageCount(0);
     setAtBottom(true);
+    stickToBottomRef.current = true;
     setShowSearch(false);
     setSearchQuery("");
     setSearchResults([]);
@@ -386,6 +387,7 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
     if (!scroller) return;
     const isAtBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < BOTTOM_THRESHOLD;
     setAtBottom(isAtBottom);
+    stickToBottomRef.current = isAtBottom;
     if (isAtBottom) setNewMessageCount(0);
     if (scroller.scrollTop < 100) loadOlderMessages();
   };
@@ -495,6 +497,32 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
   }, [messages, user.id]);
 
   ensureLoadedRef.current = ensureMessageLoaded;
+
+  // Keep the newest message in view: always after *I* send something, and
+  // for incoming messages only when the reader was already at the bottom.
+  const stickToBottomRef = useRef(true);
+  const lastMessage = messages[messages.length - 1];
+  const lastMessageId = lastMessage?._id;
+  const lastIsMine = lastMessage ? String(lastMessage.sender?._id || lastMessage.sender) === String(user.id) : false;
+  useEffect(() => {
+    if (loading || !lastMessageId) return;
+    if (!lastIsMine && !stickToBottomRef.current) return;
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    const go = () => scroller.scrollTo({ top: scroller.scrollHeight, behavior: "auto" });
+    go();
+    // Images/avatars can change the height a moment later.
+    const raf = requestAnimationFrame(go);
+    const t = setTimeout(go, 150);
+    if (lastIsMine) {
+      stickToBottomRef.current = true;
+      setNewMessageCount(0);
+    }
+    return () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(t);
+    };
+  }, [lastMessageId, lastIsMine, loading]);
 
   if (!conversation && loadingConversation) {
     return (
@@ -762,8 +790,8 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
             {messages.map((m, i) => (
               <React.Fragment key={m._id}>
                 {(i === 0 || dayKey(messages[i - 1].createdAt) !== dayKey(m.createdAt)) && (
-                  <div className="sticky top-1 z-10 flex justify-center py-2 pointer-events-none">
-                    <span className="rounded-full bg-sidebar/90 border border-white/10 px-3 py-1 text-[11px] text-muted shadow-sm backdrop-blur">
+                  <div className="flex items-center justify-center px-4 pt-3 pb-2" role="separator" aria-label={dayLabel(m.createdAt)}>
+                    <span className="text-[11px] text-muted/80 bg-white/5 rounded-full px-2.5 py-0.5">
                       {dayLabel(m.createdAt)}
                     </span>
                   </div>
