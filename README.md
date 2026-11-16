@@ -2,6 +2,8 @@
 
 ### **Conversations, in real time.**
 
+> 🍴 **Forked from [Saumya-Mishraa/velora-real-time-chat](https://github.com/Saumya-Mishraa/velora-real-time-chat)**. Original project by **Saumya Mishra**. Forked and maintained by **[Kumar Saksham](https://github.com/Seeekerror)**.
+
 A full-stack real-time communication platform: instant messaging, group chats, voice and video calls, disappearing Status updates, and shared Moments. It runs in the browser on desktop, tablet and mobile.
 
 <p align="center">
