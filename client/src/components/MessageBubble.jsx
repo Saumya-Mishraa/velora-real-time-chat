@@ -1,5 +1,9 @@
 import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import ViewOnceMedia from "./ViewOnceMedia.jsx";
+import PollCard from "./PollCard.jsx";
+import LiveLocationCard from "./LiveLocationCard.jsx";
+import ReactionPicker, { useReactionPickerId, announcePickerOpen } from "./ReactionPicker.jsx";
+import { motion } from "framer-motion";
 import {
   Check,
   CheckCheck,
@@ -7,8 +11,6 @@ import {
   Trash2,
   Copy,
   Smile,
-  MoreHorizontal,
-  ChevronLeft,
   FileText,
   FileArchive,
   FileSpreadsheet,
@@ -30,26 +32,27 @@ import {
   FileVideo,
   FileAudio,
   Link as LinkIcon,
+  Star,
+  StarOff,
+  Forward,
 } from "lucide-react";
 import Avatar from "./Avatar.jsx";
 import ImageLightbox from "./ImageLightbox.jsx";
+import { splitMentions, memberId } from "../utils/mentions.js";
+import { isSticker, isGif, canForward, isStarredBy } from "../utils/messageKinds.js";
 import { mediaUrl, downloadUrl, fmtBytes, fmtDuration, fileTypeLabel } from "../utils/media.js";
 
-const REACTIONS = ["❤️", "😂", "👍", "😮", "😢", "👏"];
 
-const formatTime = (date) => {
-  const parsed = date ? new Date(date) : null;
-  if (!parsed || Number.isNaN(parsed.getTime())) return "";
-  return parsed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-};
-
-const getId = (value) => {
-  if (value == null) return "";
-  if (typeof value === "object") return String(value._id || value.id || value);
-  return String(value);
-};
+const formatTime = (date) =>
+  new Date(date).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
 const formatSize = (bytes = 0) => fmtBytes(bytes);
+
+const formatDuration = (seconds = 0) => {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${String(s).padStart(2, "0")}`;
+};
 
 const fileIconFor = (mimeType = "") => {
   if (mimeType.startsWith("image/")) return FileImage;
@@ -83,7 +86,28 @@ const Highlighted = ({ text, term }) => {
 };
 
 const URL_SPLIT = /(https?:\/\/[^\s<>"')]+)/gi;
-const Linkified = ({ text, term, isOwn }) =>
+
+// Plain-text segment: highlights @mentions of group members and the
+// in-chat search term.
+const MentionText = ({ text, term, members, meId, isOwn }) => {
+  if (!members?.length) return <Highlighted text={text} term={term} />;
+  return splitMentions(text, members).map((p, i) => {
+    if (p.type === "text") return <Highlighted key={i} text={p.value} term={term} />;
+    const me = p.member && memberId(p.member) === String(meId);
+    const tone = isOwn
+      ? "bg-black/15 text-bg"
+      : me
+      ? "bg-amber/25 text-ink"
+      : "bg-ember/10 text-ember";
+    return (
+      <span key={i} className={`font-semibold rounded px-1 ${tone}`} title={p.member?.name}>
+        <Highlighted text={p.value} term={term} />
+      </span>
+    );
+  });
+};
+
+const Linkified = ({ text, term, isOwn, members, meId }) =>
   text.split(URL_SPLIT).map((part, i) =>
     /^https?:\/\//i.test(part) ? (
       <a
@@ -97,7 +121,7 @@ const Linkified = ({ text, term, isOwn }) =>
         <Highlighted text={part} term={term} />
       </a>
     ) : (
-      <Highlighted key={i} text={part} term={term} />
+      <MentionText key={i} text={part} term={term} members={members} meId={meId} isOwn={isOwn} />
     )
   );
 
@@ -233,10 +257,11 @@ const FileCard = ({ attachment, isOwn }) => {
 const CallRecord = ({ message, isOwn }) => {
   const c = message.call || {};
   const video = c.mode === "video";
-  const label = video ? "Video call" : "Voice call";
+  const label = `${c.isGroup ? "Group " : ""}${video ? (c.isGroup ? "video call" : "Video call") : c.isGroup ? "voice call" : "Voice call"}`;
   let Icon = video ? Video : Phone;
   let title = label;
   let sub = c.duration ? fmtDuration(c.duration) : "";
+  if (c.isGroup && c.participantCount > 1) sub = [sub, `${c.participantCount} joined`].filter(Boolean).join(" · ");
   let danger = false;
   if (c.status === "missed" || c.status === "canceled") {
     Icon = PhoneMissed;
@@ -304,217 +329,12 @@ const StatusReplyCard = ({ reply }) => (
   </div>
 );
 
-// ---------------------------------------------------------------------
-// Reaction + actions popover
-// ---------------------------------------------------------------------
-
-const useIsTouch = () => {
-  const query = "(hover: none)";
-  const [touch, setTouch] = useState(
-    () => typeof window !== "undefined" && !!window.matchMedia?.(query).matches
-  );
-  useEffect(() => {
-    const mq = window.matchMedia?.(query);
-    if (!mq) return undefined;
-    const onChange = () => setTouch(mq.matches);
-    mq.addEventListener?.("change", onChange);
-    return () => mq.removeEventListener?.("change", onChange);
-  }, []);
-  return touch;
-};
-
-const copyToClipboard = async (text) => {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    // Clipboard API needs a secure context; fall back for plain http.
-    try {
-      const ta = document.createElement("textarea");
-      ta.value = text;
-      ta.setAttribute("readonly", "");
-      ta.style.position = "fixed";
-      ta.style.opacity = "0";
-      document.body.appendChild(ta);
-      ta.select();
-      const ok = document.execCommand("copy");
-      document.body.removeChild(ta);
-      return ok;
-    } catch {
-      return false;
-    }
-  }
-};
-
-// A fixed-position popover that follows its anchor while the chat scrolls
-// and always stays inside the visible message area (never under the header
-// or the composer, never off-screen on a 320px phone).
-const MenuPopover = ({ anchorRef, isOwn, onClose, label, contentKey, children }) => {
-  const popRef = useRef(null);
-  const closeRef = useRef(onClose);
-  closeRef.current = onClose;
-  const [pos, setPos] = useState(null);
-
-  const place = useCallback(() => {
-    const anchor = anchorRef.current;
-    const pop = popRef.current;
-    if (!anchor || !pop) return;
-    const a = anchor.getBoundingClientRect();
-    const p = pop.getBoundingClientRect();
-    const scroller = anchor.closest(".chat-scroll");
-    const bounds = scroller ? scroller.getBoundingClientRect() : { top: 0, bottom: window.innerHeight };
-    // The message scrolled completely out of view: nothing left to point at.
-    if (a.bottom < bounds.top || a.top > bounds.bottom) {
-      closeRef.current();
-      return;
-    }
-    const margin = 8;
-    const minTop = Math.max(bounds.top, 0) + margin;
-    const maxBottom = Math.min(bounds.bottom, window.innerHeight) - margin;
-
-    let left = isOwn ? a.right - p.width : a.left;
-    left = Math.min(Math.max(left, margin), window.innerWidth - p.width - margin);
-
-    let top = a.top - p.height - 6; // prefer above the message
-    if (top < minTop) top = a.bottom + 6; // otherwise below it
-    if (top + p.height > maxBottom) top = Math.max(minTop, maxBottom - p.height);
-
-    setPos((prev) => (prev && prev.top === top && prev.left === left ? prev : { top, left }));
-  }, [anchorRef, isOwn]);
-
-  // Measure first (hidden), then place. Re-place when the content changes size.
-  useLayoutEffect(() => {
-    place();
-  }, [place, contentKey]);
-
-  useEffect(() => {
-    let raf = 0;
-    const schedule = () => {
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(place);
-    };
-    const onKey = (e) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        closeRef.current();
-      }
-    };
-    window.addEventListener("scroll", schedule, true);
-    window.addEventListener("resize", schedule);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      cancelAnimationFrame(raf);
-      window.removeEventListener("scroll", schedule, true);
-      window.removeEventListener("resize", schedule);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [place]);
-
-  // Move keyboard focus into the popover once it is placed.
-  useEffect(() => {
-    if (pos) popRef.current?.querySelector("button")?.focus({ preventScroll: true });
-    // Only on first placement of each view.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pos === null, contentKey]);
-
-  return (
-    <>
-      <div
-        className="fixed inset-0 z-40"
-        onPointerDown={(e) => {
-          e.stopPropagation();
-          onClose();
-        }}
-        onContextMenu={(e) => {
-          e.preventDefault();
-          onClose();
-        }}
-        aria-hidden="true"
-      />
-      <motion.div
-        ref={popRef}
-        role="menu"
-        aria-label={label}
-        initial={{ opacity: 0, y: 4 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.12 }}
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          position: "fixed",
-          top: pos?.top ?? 0,
-          left: pos?.left ?? 0,
-          visibility: pos ? "visible" : "hidden",
-        }}
-        className="z-50 w-max max-w-[calc(100vw-1rem)] rounded-2xl bg-sidebar border border-white/10 shadow-2xl overflow-hidden"
-      >
-        {children}
-      </motion.div>
-    </>
-  );
-};
-
-const MenuItem = ({ icon: Icon, children, onClick, danger = false }) => (
-  <button
-    type="button"
-    role="menuitem"
-    onClick={onClick}
-    className={`flex w-full items-center gap-3 px-4 min-h-[44px] sm:min-h-[38px] text-sm text-left outline-none transition-colors hover:bg-white/5 focus-visible:bg-white/10 ${
-      danger ? "text-red-400" : "text-ink"
-    }`}
-  >
-    <Icon size={16} className={danger ? "" : "text-muted"} />
-    <span>{children}</span>
-  </button>
-);
-
-const ReactionPill = ({ reaction, names, onToggle }) => {
-  const who = names.length ? names.join(", ") : "";
-  return (
-    <motion.button
-      type="button"
-      layout="position"
-      initial={{ scale: 0.4, opacity: 0 }}
-      animate={{ scale: 1, opacity: 1 }}
-      exit={{ scale: 0.4, opacity: 0 }}
-      whileTap={{ scale: 0.9 }}
-      transition={{ type: "spring", stiffness: 520, damping: 22 }}
-      onClick={(event) => {
-        event.stopPropagation();
-        onToggle(reaction.emoji);
-      }}
-      aria-pressed={reaction.mine}
-      aria-label={`${reaction.emoji} ${reaction.count} ${reaction.count === 1 ? "reaction" : "reactions"}${
-        who ? ` from ${who}` : ""
-      }. ${reaction.mine ? "Press to remove yours" : "Press to add yours"}`}
-      title={`${who ? `${who} · ` : ""}${reaction.mine ? "Click to remove your reaction" : "Click to react too"}`}
-      className={`inline-flex items-center justify-center gap-1 h-7 min-w-[2rem] px-2 rounded-full border text-[13px] leading-none shadow-sm transition-colors ${
-        reaction.mine
-          ? "bg-ember/20 border-ember/60 text-ink"
-          : "bg-sidebar border-white/10 text-ink hover:border-white/30"
-      }`}
-    >
-      <span className="text-[15px] leading-none">{reaction.emoji}</span>
-      {reaction.count > 1 && (
-        <motion.span
-          key={reaction.count}
-          initial={{ y: -6, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          className="tabular-nums text-xs opacity-80"
-        >
-          {reaction.count}
-        </motion.span>
-      )}
-    </motion.button>
-  );
-};
-
 const MessageBubble = ({
   message,
   isOwn,
   isGroup,
   currentUserId,
   memberCount,
-  memberNames,
   onReply,
   onDeleteForMe,
   onDeleteForEveryone,
@@ -524,57 +344,141 @@ const MessageBubble = ({
   onUnpin,
   onShowInfo,
   onJumpToMessage,
+  onStar,
+  onForward,
+  members,
   showSender,
   highlighted,
   highlightTerm = "",
   isMatch = false,
   isCurrentMatch = false,
   onOpenMoment,
+  isAdmin = false,
 }) => {
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [menuView, setMenuView] = useState("main"); // "main" | "delete"
-  const [copied, setCopied] = useState(false);
-  const [heartBurst, setHeartBurst] = useState(0);
+  const [showActions, setShowActions] = useState(false);
+  const [showReactions, setShowReactions] = useState(false);
   const [imgLoaded, setImgLoaded] = useState(false);
   const [imgError, setImgError] = useState(false);
-  const [imageRetry, setImageRetry] = useState(0);
   const [lightboxSrc, setLightboxSrc] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState(message.text || "");
+  const [showDeleteMenu, setShowDeleteMenu] = useState(false);
+  // Fixed-position coords for the "..." actions menu, computed in the
+  // layout effect below. null until measured, so the menu renders once
+  // off-screen (invisible) to get its real size before being placed —
+  // see the root-cause note on that effect.
+  const [menuPos, setMenuPos] = useState(null);
 
-  const isTouch = useIsTouch();
-  const rowRef = useRef(null);
-  const anchorRef = useRef(null);
-  const moreBtnRef = useRef(null);
-  const copyTimer = useRef(null);
-  // Only messages that arrive live get the entrance animation; history that
-  // is loaded or prepended while scrolling should not all animate at once.
-  const isFresh = useRef(Date.now() - new Date(message.createdAt || 0).getTime() < 4000);
+  const bubbleRef = useRef(null);
+  const triggerRef = useRef(null);
+  const actionsRef = useRef(null);
+  // The picker's lifetime is independent of hover/scroll (see ReactionPicker.jsx).
+  const pickerId = useReactionPickerId();
+  const showReactionsRef = useRef(false);
+  showReactionsRef.current = showReactions;
+  // Closing the picker (pick / outside press / Esc) also dismisses the actions
+  // menu: it may only be open because the picker pinned it past mouse-leave.
+  const closePicker = useCallback(() => {
+    setShowReactions(false);
+    setShowActions(false);
+  }, []);
+  const toggleReactions = () => {
+    setShowReactions((open) => {
+      if (!open) announcePickerOpen(pickerId);
+      return !open;
+    });
+  };
+  // Touch long-press on a bubble opens the actions + picker (WhatsApp-style).
+  const longPress = useRef({ timer: null, fired: false, x: 0, y: 0 });
+  const cancelLongPress = () => {
+    clearTimeout(longPress.current.timer);
+    longPress.current.timer = null;
+  };
+  const onTriggerPointerDown = (e) => {
+    if (e.pointerType !== "touch" || isEditing) return;
+    longPress.current.fired = false;
+    longPress.current.x = e.clientX;
+    longPress.current.y = e.clientY;
+    cancelLongPress();
+    longPress.current.timer = setTimeout(() => {
+      longPress.current.fired = true;
+      setShowActions(true);
+      setShowReactions(true);
+      announcePickerOpen(pickerId);
+      navigator.vibrate?.(8);
+    }, 420);
+  };
+  const onTriggerPointerMove = (e) => {
+    if (!longPress.current.timer) return;
+    if (Math.hypot(e.clientX - longPress.current.x, e.clientY - longPress.current.y) > 10) cancelLongPress();
+  };
+  useEffect(() => cancelLongPress, []);
 
   useEffect(() => {
-    if (!isEditing) setEditText(message.text || "");
-  }, [message.text, isEditing]);
-
-  useEffect(() => {
-    if (highlighted && rowRef.current) {
-      rowRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (highlighted && bubbleRef.current) {
+      bubbleRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
     }
   }, [highlighted]);
 
-  useEffect(() => () => clearTimeout(copyTimer.current), []);
+  // Root cause of the actions menu ("...", React/Reply/Edit/Pin/Info/
+  // Delete) overflowing or getting cut off on phones: it used to be
+  // `position: absolute`, anchored to the message bubble's own left/right
+  // edge. For a short message sitting near the edge of a narrow screen,
+  // the pill of ~6-7 icon buttons simply didn't fit in the remaining
+  // horizontal space, and the chat scroll container's overflow-x-hidden
+  // (needed elsewhere to stop the page itself from scrolling sideways)
+  // then silently clipped whatever spilled past the viewport edge.
+  //
+  // Fix: render it `position: fixed` instead, measure its own size once
+  // it mounts, and clamp its left/top so it's always fully on-screen —
+  // with an 8px margin — regardless of where the message bubble sits or
+  // how small the screen is. This touches positioning only; the pill's
+  // existing visual design (colors, icon buttons, spacing) is unchanged.
+  useLayoutEffect(() => {
+    if (!showActions) {
+      setMenuPos(null);
+      return;
+    }
+    const place = () => {
+      const trigger = triggerRef.current;
+      const menu = actionsRef.current;
+      if (!trigger || !menu) return;
+      const triggerRect = trigger.getBoundingClientRect();
+      const menuRect = menu.getBoundingClientRect();
+      const margin = 8;
 
-  const closeMenu = useCallback((restoreFocus = false) => {
-    setMenuOpen(false);
-    setMenuView("main");
-    setCopied(false);
-    if (restoreFocus) moreBtnRef.current?.focus({ preventScroll: true });
-  }, []);
+      let left = isOwn ? triggerRect.right - menuRect.width : triggerRect.left;
+      left = Math.min(Math.max(left, margin), window.innerWidth - menuRect.width - margin);
 
-  const openMenu = useCallback(() => {
-    setMenuView("main");
-    setCopied(false);
-    setMenuOpen(true);
-  }, []);
+      let top = triggerRect.top - menuRect.height - margin;
+      if (top < margin) top = Math.min(triggerRect.bottom + margin, window.innerHeight - menuRect.height - margin);
+
+      setMenuPos({ top, left });
+    };
+
+    // First paint: the menu is in the DOM (see the `visibility` style
+    // below) but not yet positioned, so its real width/height can be
+    // measured. Then place it for real.
+    place();
+
+    // Close rather than leave a stale position behind if the page
+    // scrolls or resizes while the menu is open. Scroll events don't
+    // bubble, so a capturing window listener is what catches scrolling
+    // on the chat's own scroll container (or any ancestor), not just
+    // the window itself.
+    // While the reaction picker is open the menu stays put and just follows
+    // its message instead of closing (closing it was what killed the picker).
+    const close = () => {
+      if (showReactionsRef.current) place();
+      else setShowActions(false);
+    };
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [showActions, isOwn]);
 
   if (message.deletedForEveryone || message.deleted) {
     return (
@@ -589,45 +493,21 @@ const MessageBubble = ({
     );
   }
 
+  const FileIcon = fileIconFor(message.attachment?.mimeType);
+  const starred = isStarredBy(message, currentUserId);
+  const sticker = isSticker(message);
+  const gif = isGif(message);
+  const forwardable = canForward(message);
+  const mentionMembers = isGroup ? members : null;
+
   // Ticks: single grey (sent) -> double grey (delivered) -> double
   // colored (seen). Group chats only show "seen" once every other
   // member has read it; otherwise stay at delivered.
   const othersCount = Math.max(0, (memberCount || 2) - 1);
-  const normalizedCurrentUserId = getId(currentUserId);
-  const deliveredCount = (message.deliveredTo || []).filter(
-    (user) => getId(user) !== normalizedCurrentUserId
-  ).length;
-  const seenCount = (message.readBy || []).filter(
-    (user) => getId(user) !== normalizedCurrentUserId
-  ).length;
+  const deliveredCount = (message.deliveredTo || []).filter((u) => (u.id || u._id || u) !== currentUserId).length;
+  const seenCount = (message.readBy || []).filter((u) => (u.id || u._id || u) !== currentUserId).length;
   const isDelivered = deliveredCount > 0;
   const isSeen = isGroup ? seenCount >= othersCount && othersCount > 0 : seenCount > 0;
-
-  // The API stores one reaction per user. Group them for a compact strip,
-  // remember who reacted (for tooltips) and which one is mine.
-  const nameFor = (reaction) => {
-    const id = getId(reaction.user);
-    if (normalizedCurrentUserId && id === normalizedCurrentUserId) return "You";
-    return memberNames?.[id] || reaction.user?.name || "Someone";
-  };
-  const reactionSummary = [];
-  (message.reactions || []).forEach((reaction) => {
-    if (!reaction?.emoji) return;
-    let entry = reactionSummary.find((item) => item.emoji === reaction.emoji);
-    if (!entry) {
-      entry = { emoji: reaction.emoji, count: 0, mine: false, names: [] };
-      reactionSummary.push(entry);
-    }
-    entry.count += 1;
-    const name = nameFor(reaction);
-    if (name === "You") {
-      entry.mine = true;
-      entry.names.unshift(name);
-    } else {
-      entry.names.push(name);
-    }
-  });
-  const myReaction = reactionSummary.find((item) => item.mine)?.emoji || null;
 
   const commitEdit = () => {
     const trimmed = editText.trim();
@@ -635,79 +515,63 @@ const MessageBubble = ({
     setIsEditing(false);
   };
 
-  const react = (emoji) => {
-    onReact?.(message, emoji);
-  };
-
-  const pickReaction = (emoji) => {
-    react(emoji);
-    closeMenu(true);
-  };
-
-  const handleCopy = async () => {
-    const ok = await copyToClipboard(message.text || "");
-    setCopied(ok);
-    clearTimeout(copyTimer.current);
-    copyTimer.current = setTimeout(() => closeMenu(true), ok ? 700 : 0);
-  };
-
-  const interactiveTarget = (target) =>
-    !!target?.closest?.("a, button, video, audio, textarea, input");
-
-  // Desktop: double-click sends a quick heart. Right-click opens the menu
-  // (unless the person is selecting text or right-clicking a link).
-  const handleDoubleClick = (e) => {
-    if (isTouch || interactiveTarget(e.target) || isEditing) return;
-    window.getSelection?.()?.removeAllRanges();
-    if (myReaction !== "❤️") react("❤️");
-    setHeartBurst((n) => n + 1);
-  };
-
-  const handleContextMenu = (e) => {
-    if (isEditing || interactiveTarget(e.target)) return;
-    if (window.getSelection?.()?.toString()) return;
-    e.preventDefault();
-    openMenu();
-  };
-
-  const handleBubbleClick = (e) => {
-    // Touch screens have no hover, so a tap opens the reactions + actions.
-    if (!isTouch || isEditing || interactiveTarget(e.target)) return;
-    openMenu();
-  };
-
-  const handleBubbleKeyDown = (e) => {
-    if (e.target !== e.currentTarget) return;
-    if (e.key === "Enter" || e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) {
-      e.preventDefault();
-      openMenu();
-    }
-  };
-
-  const canCopy = Boolean(message.text) && message.type !== "call";
-  const canEdit = isOwn && message.type === "text" && !message.shared;
-
   return (
-    <div
+    <motion.div
+      layout
       id={`message-${message._id}`}
-      ref={rowRef}
-      className={`flex ${isOwn ? "justify-end" : "justify-start"} px-3 sm:px-4 py-1 group rounded-xl transition-colors duration-700 ${
-        highlighted ? "bg-amber/10" : "bg-transparent"
-      }`}
+      ref={bubbleRef}
+      initial={{ opacity: 0, y: 12, scale: 0.98 }}
+      animate={{
+        opacity: 1,
+        y: 0,
+        scale: 1,
+        backgroundColor: highlighted ? "rgba(255,184,107,0.12)" : "rgba(0,0,0,0)",
+      }}
+      transition={{ type: "spring", stiffness: 400, damping: 32 }}
+      className={`flex ${isOwn ? "justify-end" : "justify-start"} px-3 sm:px-4 py-1 group rounded-xl`}
+      // Hover is mouse-only: on touch the emulated mouseenter used to open
+      // the menu and the following click toggled it shut again. The reaction
+      // picker never closes on leave - only on pick / outside press / Esc.
+      onPointerEnter={(e) => {
+        if (e.pointerType === "mouse") setShowActions(true);
+      }}
+      onPointerLeave={(e) => {
+        if (e.pointerType === "mouse" && !showReactionsRef.current) setShowActions(false);
+      }}
     >
-      <motion.div
-        initial={isFresh.current ? { opacity: 0, y: 10, scale: 0.98 } : false}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        transition={{ type: "spring", stiffness: 420, damping: 32 }}
+      <div
         className={`flex items-end gap-2 min-w-0 max-w-[88%] sm:max-w-[75%] lg:max-w-[65%] ${
           isOwn ? "flex-row-reverse" : ""
         }`}
       >
         {!isOwn && showSender && <Avatar name={message.sender?.name} size={28} />}
 
-        <div className="relative min-w-0">
+        <div
+          ref={triggerRef}
+          className="relative min-w-0"
+          onPointerDown={onTriggerPointerDown}
+          onPointerMove={onTriggerPointerMove}
+          onPointerUp={cancelLongPress}
+          onPointerCancel={cancelLongPress}
+          onContextMenu={(e) => {
+            if (longPress.current.fired) e.preventDefault();
+          }}
+          onClick={() => {
+            if (longPress.current.fired) {
+              longPress.current.fired = false; // the click that ends a long-press
+              return;
+            }
+            setShowActions((s) => !s);
+          }}
+        >
           {!isOwn && isGroup && showSender && (
             <p className="text-xs text-ember/80 font-medium px-1 mb-0.5">{message.sender?.name}</p>
+          )}
+
+          {message.forwarded && (
+            <div className={`flex items-center gap-1 text-[10px] text-muted italic mb-0.5 ${isOwn ? "justify-end" : ""}`}>
+              <Forward size={10} /> Forwarded
+            </div>
           )}
 
           {message.pinned && (
@@ -732,285 +596,311 @@ const MessageBubble = ({
             </button>
           )}
 
-          {/* Bubble + its hover toolbar. This wrapper is the popover's anchor. */}
-          <div ref={anchorRef} className="relative">
-            <div
-              tabIndex={0}
-              onClick={handleBubbleClick}
-              onDoubleClick={handleDoubleClick}
-              onContextMenu={handleContextMenu}
-              onKeyDown={handleBubbleKeyDown}
-              aria-label={`${isOwn ? "Your" : `${message.sender?.name || "Their"}`} message. Press Enter for reactions and actions.`}
-              style={isTouch ? { WebkitTouchCallout: "none", WebkitUserSelect: "none", userSelect: "none" } : undefined}
-              className={`relative rounded-2xl px-3.5 py-2 sm:px-4 min-w-0 break-words outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-ember/70 ${
-                isOwn ? "bg-ember text-bg rounded-br-sm" : "bg-chat border border-white/5 text-ink rounded-bl-sm"
-              } ${isCurrentMatch ? "ring-2 ring-amber" : isMatch ? "ring-1 ring-amber/50" : ""}`}
-            >
-              {message.type === "image" && message.attachment?.url && (
-                imgError ? (
-                  <button
-                    type="button"
+          <div
+            className={`min-w-0 break-words ${
+              sticker
+                ? `rounded-2xl ${isOwn ? "text-ink" : "text-ink"}`
+                : `rounded-2xl px-3.5 py-2 sm:px-4 ${
+                    isOwn ? "bg-ember text-bg rounded-br-sm" : "incoming-bubble bg-chat border border-white/5 text-ink rounded-bl-sm"
+                  }`
+            } ${isCurrentMatch ? "ring-2 ring-amber" : isMatch ? "ring-1 ring-amber/50" : ""}`}
+          >
+            {message.viewOnce && <ViewOnceMedia message={message} isOwn={isOwn} currentUserId={currentUserId} />}
+
+            {message.type === "poll" && <PollCard message={message} isOwn={isOwn} isAdmin={isAdmin} members={members || []} />}
+
+            {message.type === "location" && <LiveLocationCard message={message} isOwn={isOwn} />}
+
+            {!message.viewOnce && message.type === "image" && message.attachment?.url && (
+              imgError ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setImgError(false);
+                    setImgLoaded(false);
+                  }}
+                  className={`w-full max-w-[240px] sm:max-w-xs flex flex-col items-center justify-center gap-1.5 rounded-lg mb-1 py-6 text-center ${
+                    isOwn ? "bg-black/15" : "bg-black/20"
+                  }`}
+                >
+                  <ImageOff size={22} className="opacity-70" />
+                  <span className="text-xs opacity-80">Image failed to load — tap to retry</span>
+                </button>
+              ) : (
+                <div className={`relative w-full mb-1 ${sticker ? "max-w-[150px] sm:max-w-[170px]" : "max-w-[240px] sm:max-w-xs"}`}>
+                  {!imgLoaded && (
+                    <div className="absolute inset-0 rounded-lg bg-black/10 animate-pulse" style={{ aspectRatio: "4 / 3" }} />
+                  )}
+                  <motion.img
+                    src={mediaUrl(message.attachment.url)}
+                    alt={message.attachment.name || "Shared image"}
+                    onLoad={() => setImgLoaded(true)}
+                    onError={() => setImgError(true)}
                     onClick={(e) => {
                       e.stopPropagation();
-                      setImgError(false);
-                      setImgLoaded(false);
-                      setImageRetry((attempt) => attempt + 1);
+                      setLightboxSrc(mediaUrl(message.attachment.url));
                     }}
-                    className={`w-full max-w-[240px] sm:max-w-xs flex flex-col items-center justify-center gap-1.5 rounded-lg mb-1 py-6 text-center ${
-                      isOwn ? "bg-black/15" : "bg-black/20"
-                    }`}
-                  >
-                    <ImageOff size={22} className="opacity-70" />
-                    <span className="text-xs opacity-80">Image failed to load — tap to retry</span>
-                  </button>
-                ) : (
-                  <div className="relative w-full max-w-[240px] sm:max-w-xs mb-1">
-                    {!imgLoaded && (
-                      <div className="absolute inset-0 rounded-lg bg-black/10 animate-pulse" style={{ aspectRatio: "4 / 3" }} />
-                    )}
-                    <motion.img
-                      key={`${message._id || "image"}-${imageRetry}`}
-                      src={mediaUrl(message.attachment.url)}
-                      alt={message.attachment.name || "Shared image"}
-                      onLoad={() => setImgLoaded(true)}
-                      onError={() => setImgError(true)}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setLightboxSrc(mediaUrl(message.attachment.url));
-                      }}
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: imgLoaded ? 1 : 0 }}
-                      transition={{ duration: 0.35 }}
-                      className="w-full h-auto rounded-lg cursor-zoom-in object-cover"
-                      loading="lazy"
-                    />
-                  </div>
-                )
-              )}
-
-              {message.type === "call" && <CallRecord message={message} isOwn={isOwn} />}
-
-              {message.statusReply?.statusId && <StatusReplyCard reply={message.statusReply} />}
-
-              {message.shared?.kind === "moment" && <SharedMoment shared={message.shared} isOwn={isOwn} onOpen={onOpenMoment} />}
-
-              {message.type === "voice" && message.attachment?.url && (
-                <VoicePlayer src={mediaUrl(message.attachment.url)} duration={message.attachment.duration} isOwn={isOwn} />
-              )}
-
-              {message.type === "video" && message.attachment?.url && (
-                <video
-                  src={mediaUrl(message.attachment.url)}
-                  controls
-                  playsInline
-                  preload="metadata"
-                  onClick={(e) => e.stopPropagation()}
-                  className="w-[240px] max-w-full sm:w-[300px] max-h-[320px] rounded-lg mb-1 bg-black"
-                />
-              )}
-
-              {message.type === "audio" && message.attachment?.url && (
-                <div className="mb-1 w-[240px] max-w-full sm:w-[280px]" onClick={(e) => e.stopPropagation()}>
-                  <p className="text-xs truncate opacity-80 mb-1" title={message.attachment.name}>{message.attachment.name}</p>
-                  <audio src={mediaUrl(message.attachment.url)} controls preload="metadata" className="w-full h-9" />
-                </div>
-              )}
-
-              {message.type === "file" && message.attachment?.url && (
-                <FileCard attachment={message.attachment} isOwn={isOwn} />
-              )}
-
-              {isEditing ? (
-                <div onClick={(e) => e.stopPropagation()} className="flex flex-col gap-1.5">
-                  <textarea
-                    autoFocus
-                    value={editText}
-                    onFocus={(e) => e.target.setSelectionRange(e.target.value.length, e.target.value.length)}
-                    onChange={(e) => setEditText(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-                        e.preventDefault();
-                        commitEdit();
-                      }
-                      if (e.key === "Escape") setIsEditing(false);
-                    }}
-                    rows={2}
-                    aria-label="Edit message"
-                    className="bg-black/15 rounded-lg px-2 py-1 outline-none resize-none text-base sm:text-sm w-56 sm:w-64 max-w-full"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: imgLoaded ? 1 : 0 }}
+                    transition={{ duration: 0.35 }}
+                    className={`w-full h-auto rounded-lg cursor-zoom-in ${sticker ? "object-contain" : "object-cover"}`}
+                    loading="lazy"
                   />
-                  <div className="flex gap-1 text-xs">
-                    <button onClick={commitEdit} className="px-2.5 min-h-[32px] rounded-full bg-black/20 font-medium hover:bg-black/30">Save</button>
-                    <button onClick={() => setIsEditing(false)} className="px-2.5 min-h-[32px] rounded-full opacity-80 hover:bg-black/10">Cancel</button>
-                  </div>
+                  {gif && (
+                    <span className="absolute bottom-1.5 left-1.5 text-[9px] font-bold tracking-wide bg-black/60 text-white rounded px-1.5 py-0.5 pointer-events-none">
+                      GIF
+                    </span>
+                  )}
                 </div>
-              ) : (
-                message.text && message.type !== "call" && !(message.shared?.kind === "moment") && (
-                  <p className="whitespace-pre-wrap break-words">
-                    <Linkified text={message.text} term={highlightTerm} isOwn={isOwn} />
-                  </p>
-                )
-              )}
+              )
+            )}
 
-              <div
-                className={`flex items-center gap-1 mt-1 text-[10px] ${
-                  isOwn ? "text-bg/70 justify-end" : "text-muted"
-                }`}
-              >
-                {message.edited && <span className="italic">edited</span>}
-                <span>{formatTime(message.createdAt)}</span>
-                {isOwn && (isSeen ? <CheckCheck size={12} className="text-blue-200" aria-label="Seen" /> : isDelivered ? <CheckCheck size={12} aria-label="Delivered" /> : <Check size={12} aria-label="Sent" />)}
-              </div>
+            {message.type === "call" && <CallRecord message={message} isOwn={isOwn} />}
 
-              {/* Double-click heart burst */}
-              <AnimatePresence>
-                {heartBurst > 0 && (
-                  <motion.span
-                    key={heartBurst}
-                    initial={{ scale: 0.3, opacity: 0.95 }}
-                    animate={{ scale: 1.8, opacity: 0 }}
-                    transition={{ duration: 0.7, ease: "easeOut" }}
-                    onAnimationComplete={() => setHeartBurst(0)}
-                    className="pointer-events-none absolute inset-0 flex items-center justify-center text-3xl"
-                    aria-hidden="true"
-                  >
-                    ❤️
-                  </motion.span>
-                )}
-              </AnimatePresence>
-            </div>
+            {message.statusReply?.statusId && <StatusReplyCard reply={message.statusReply} />}
 
-            {/* Hover toolbar (devices with a pointer). Stays reachable by keyboard. */}
-            {!isTouch && !isEditing && (
-              <div
-                className={`absolute top-1/2 -translate-y-1/2 ${isOwn ? "right-full mr-1.5" : "left-full ml-1.5"} flex items-center gap-0.5 rounded-full bg-sidebar/95 border border-white/10 p-0.5 shadow-lg transition-opacity duration-150 ${
-                  menuOpen ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-within:opacity-100"
-                }`}
-              >
-                <button
-                  type="button"
-                  onClick={openMenu}
-                  title="React"
-                  aria-label="React to message"
-                  className="w-8 h-8 flex items-center justify-center rounded-full text-muted hover:text-amber hover:bg-white/10 transition-colors"
-                >
-                  <Smile size={16} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onReply?.(message)}
-                  title="Reply"
-                  aria-label="Reply"
-                  className="w-8 h-8 flex items-center justify-center rounded-full text-muted hover:text-ember hover:bg-white/10 transition-colors"
-                >
-                  <Reply size={16} />
-                </button>
-                <button
-                  ref={moreBtnRef}
-                  type="button"
-                  onClick={openMenu}
-                  aria-haspopup="menu"
-                  aria-expanded={menuOpen}
-                  title="More"
-                  aria-label="More actions"
-                  className="w-8 h-8 flex items-center justify-center rounded-full text-muted hover:text-ink hover:bg-white/10 transition-colors"
-                >
-                  <MoreHorizontal size={16} />
-                </button>
+            {message.shared?.kind === "moment" && <SharedMoment shared={message.shared} isOwn={isOwn} onOpen={onOpenMoment} />}
+
+            {!message.viewOnce && message.type === "voice" && message.attachment?.url && (
+              <VoicePlayer src={mediaUrl(message.attachment.url)} duration={message.attachment.duration} isOwn={isOwn} />
+            )}
+
+            {!message.viewOnce && message.type === "video" && message.attachment?.url && (
+              <video
+                src={mediaUrl(message.attachment.url)}
+                controls
+                playsInline
+                preload="metadata"
+                onClick={(e) => e.stopPropagation()}
+                className="w-[240px] max-w-full sm:w-[300px] max-h-[320px] rounded-lg mb-1 bg-black"
+              />
+            )}
+
+            {message.type === "audio" && message.attachment?.url && (
+              <div className="mb-1 w-[240px] max-w-full sm:w-[280px]" onClick={(e) => e.stopPropagation()}>
+                <p className="text-xs truncate opacity-80 mb-1" title={message.attachment.name}>{message.attachment.name}</p>
+                <audio src={mediaUrl(message.attachment.url)} controls preload="metadata" className="w-full h-9" />
               </div>
             )}
+
+            {message.type === "file" && message.attachment?.url && (
+              <FileCard attachment={message.attachment} isOwn={isOwn} />
+            )}
+
+            {isEditing ? (
+              <div onClick={(e) => e.stopPropagation()} className="flex flex-col gap-1.5">
+                <textarea
+                  autoFocus
+                  value={editText}
+                  onChange={(e) => setEditText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      commitEdit();
+                    }
+                    if (e.key === "Escape") setIsEditing(false);
+                  }}
+                  rows={2}
+                  className="bg-black/15 rounded-lg px-2 py-1 outline-none resize-none text-sm w-56 sm:w-64"
+                />
+                <div className="flex gap-2 text-xs">
+                  <button onClick={commitEdit} className="underline">Save</button>
+                  <button onClick={() => setIsEditing(false)} className="underline opacity-70">Cancel</button>
+                </div>
+              </div>
+            ) : (
+              message.text && message.type !== "call" && message.type !== "poll" && !(message.shared?.kind === "moment") && (
+                <p className="whitespace-pre-wrap break-words">
+                  <Linkified text={message.text} term={highlightTerm} isOwn={isOwn} members={mentionMembers} meId={currentUserId} />
+                </p>
+              )
+            )}
+
+            <div
+              className={`flex items-center gap-1 mt-1 text-[10px] ${
+                sticker ? "text-muted justify-end" : isOwn ? "text-bg/70 justify-end" : "text-muted"
+              }`}
+            >
+              {starred && <Star size={10} fill="currentColor" className={sticker || !isOwn ? "text-amber" : ""} aria-label="Starred" />}
+              {message.edited && <span className="italic">edited</span>}
+              <span>{formatTime(message.createdAt)}</span>
+              {isOwn && (isSeen ? <CheckCheck size={12} className={sticker ? "text-blue-400" : "text-blue-200"} /> : isDelivered ? <CheckCheck size={12} /> : <Check size={12} />)}
+            </div>
           </div>
 
-          {reactionSummary.length > 0 && (
-            <div
-              className={`relative z-[1] -mt-1.5 mb-1 flex flex-wrap gap-1 px-2 ${isOwn ? "justify-end" : "justify-start"}`}
-              role="group"
-              aria-label="Reactions"
-            >
-              <AnimatePresence initial={false}>
-                {reactionSummary.map((reaction) => (
-                  <ReactionPill key={reaction.emoji} reaction={reaction} names={reaction.names} onToggle={react} />
-                ))}
-              </AnimatePresence>
+          {message.reactions?.length > 0 && (
+            <div className="flex gap-1 mt-1">
+              {message.reactions.map((r, i) => (
+                <motion.span
+                  key={i}
+                  initial={{ scale: 0, rotate: -15 }}
+                  animate={{ scale: 1, rotate: 0 }}
+                  transition={{ type: "spring", stiffness: 500, damping: 15 }}
+                  className="text-xs bg-chat border border-white/10 rounded-full px-1.5 py-0.5"
+                >
+                  {r.emoji}
+                </motion.span>
+              ))}
             </div>
+          )}
+
+          {showActions && (
+            <motion.div
+              ref={actionsRef}
+              initial={{ opacity: 0, y: -4 }}
+              animate={{ opacity: 1, y: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                position: "fixed",
+                top: menuPos?.top ?? 0,
+                left: menuPos?.left ?? 0,
+                visibility: menuPos ? "visible" : "hidden",
+              }}
+              className="relative flex items-center gap-1 bg-sidebar border border-white/10 rounded-full px-1.5 py-1 shadow-lg z-50 max-w-[calc(100vw-1rem)] flex-wrap before:content-[''] before:absolute before:inset-x-0 before:-top-3 before:h-3 after:content-[''] after:absolute after:inset-x-0 after:-bottom-3 after:h-3"
+            >
+              <button
+                data-reaction-toggle
+                aria-expanded={showReactions}
+                onClick={toggleReactions}
+                className="p-1 rounded-full hover:bg-white/10 text-muted hover:text-ember transition"
+                title="React"
+                aria-label="React"
+              >
+                <Smile size={14} />
+              </button>
+              <button
+                onClick={() => onReply?.(message)}
+                className="p-1 rounded-full hover:bg-white/10 text-muted hover:text-ember transition"
+                title="Reply"
+                aria-label="Reply"
+              >
+                <Reply size={14} />
+              </button>
+              {forwardable && (
+                <button
+                  onClick={() => {
+                    setShowActions(false);
+                    onForward?.(message);
+                  }}
+                  className="p-1 rounded-full hover:bg-white/10 text-muted hover:text-ember transition"
+                  title="Forward"
+                  aria-label="Forward message"
+                >
+                  <Forward size={14} />
+                </button>
+              )}
+              {!message.viewOnce && (
+              <button
+                onClick={() => onStar?.(message, !starred)}
+                className={`p-1 rounded-full hover:bg-white/10 transition ${starred ? "text-amber" : "text-muted hover:text-amber"}`}
+                title={starred ? "Remove star" : "Star"}
+                aria-label={starred ? "Remove star" : "Star message"}
+                aria-pressed={starred}
+              >
+                {starred ? <StarOff size={14} /> : <Star size={14} />}
+              </button>
+              )}
+              {message.text && message.type !== "call" && message.type !== "poll" && !message.viewOnce && (
+                <button
+                  onClick={() => navigator.clipboard?.writeText(message.text || "")}
+                  className="p-1 rounded-full hover:bg-white/10 text-muted hover:text-ember transition"
+                  title="Copy"
+                  aria-label="Copy text"
+                >
+                  <Copy size={14} />
+                </button>
+              )}
+              {isOwn && message.type === "text" && !message.shared && (
+                <button
+                  onClick={() => setIsEditing(true)}
+                  className="p-1 rounded-full hover:bg-white/10 text-muted hover:text-ember transition"
+                  title="Edit"
+                  aria-label="Edit message"
+                >
+                  <Pencil size={14} />
+                </button>
+              )}
+              <button
+                onClick={() => (message.pinned ? onUnpin?.(message) : onPin?.(message))}
+                className="p-1 rounded-full hover:bg-white/10 text-muted hover:text-amber transition"
+                title={message.pinned ? "Unpin" : "Pin"}
+                aria-label={message.pinned ? "Unpin message" : "Pin message"}
+              >
+                {message.pinned ? <PinOff size={14} /> : <Pin size={14} />}
+              </button>
+              {isOwn && (
+                <button
+                  onClick={() => onShowInfo?.(message)}
+                  className="p-1 rounded-full hover:bg-white/10 text-muted hover:text-ember transition"
+                  title="Message info"
+                  aria-label="Message info"
+                >
+                  <Info size={14} />
+                </button>
+              )}
+              <div className="relative">
+                <button
+                  onClick={() => setShowDeleteMenu((s) => !s)}
+                  className="p-1 rounded-full hover:bg-white/10 text-muted hover:text-red-400 transition"
+                  title="Delete"
+                  aria-label="Delete message"
+                >
+                  <Trash2 size={14} />
+                </button>
+                {showDeleteMenu && (
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className={`absolute top-8 ${isOwn ? "right-0" : "left-0"} bg-sidebar border border-white/10 rounded-xl shadow-lg py-1 text-xs whitespace-nowrap z-20`}
+                  >
+                    <button
+                      onClick={() => {
+                        onDeleteForMe?.(message);
+                        setShowDeleteMenu(false);
+                      }}
+                      className="block w-full text-left px-3 py-1.5 hover:bg-white/5"
+                    >
+                      Delete for me
+                    </button>
+                    {isOwn && (
+                      <button
+                        onClick={() => {
+                          if (window.confirm("Delete this message for everyone?")) {
+                            onDeleteForEveryone?.(message);
+                          }
+                          setShowDeleteMenu(false);
+                        }}
+                        className="block w-full text-left px-3 py-1.5 hover:bg-white/5 text-red-400"
+                      >
+                        Delete for everyone
+                      </button>
+                    )}
+                  </motion.div>
+                )}
+              </div>
+
+            </motion.div>
           )}
         </div>
-      </motion.div>
+      </div>
 
-      {menuOpen && (
-        <MenuPopover
-          anchorRef={anchorRef}
-          isOwn={isOwn}
-          onClose={() => closeMenu(true)}
-          label="Message actions"
-          contentKey={menuView}
-        >
-          {menuView === "main" ? (
-            <>
-              <div className="flex items-center gap-0.5 px-2 py-2" role="group" aria-label="Quick reactions">
-                {REACTIONS.map((emoji) => (
-                  <motion.button
-                    key={emoji}
-                    type="button"
-                    role="menuitem"
-                    whileHover={{ scale: 1.25 }}
-                    whileTap={{ scale: 0.9 }}
-                    transition={{ type: "spring", stiffness: 500, damping: 18 }}
-                    onClick={() => pickReaction(emoji)}
-                    aria-label={myReaction === emoji ? `Remove ${emoji} reaction` : `React with ${emoji}`}
-                    aria-pressed={myReaction === emoji}
-                    className={`w-10 h-10 sm:w-9 sm:h-9 rounded-full text-[22px] leading-none flex items-center justify-center outline-none focus-visible:bg-white/15 ${
-                      myReaction === emoji ? "bg-ember/25 ring-1 ring-ember/60" : "hover:bg-white/10"
-                    }`}
-                  >
-                    {emoji}
-                  </motion.button>
-                ))}
-              </div>
-              <div className="border-t border-white/10 py-1">
-                <MenuItem icon={Reply} onClick={() => { onReply?.(message); closeMenu(); }}>Reply</MenuItem>
-                {canCopy && (
-                  <MenuItem icon={Copy} onClick={handleCopy}>{copied ? "Copied" : "Copy text"}</MenuItem>
-                )}
-                {canEdit && (
-                  <MenuItem icon={Pencil} onClick={() => { setIsEditing(true); closeMenu(); }}>Edit</MenuItem>
-                )}
-                <MenuItem
-                  icon={message.pinned ? PinOff : Pin}
-                  onClick={() => { (message.pinned ? onUnpin : onPin)?.(message); closeMenu(); }}
-                >
-                  {message.pinned ? "Unpin" : "Pin"}
-                </MenuItem>
-                {isOwn && (
-                  <MenuItem icon={Info} onClick={() => { onShowInfo?.(message); closeMenu(); }}>Message info</MenuItem>
-                )}
-                <MenuItem icon={Trash2} danger onClick={() => setMenuView("delete")}>Delete…</MenuItem>
-              </div>
-            </>
-          ) : (
-            <div className="py-1 min-w-[220px]">
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => setMenuView("main")}
-                className="flex w-full items-center gap-2 px-3 min-h-[40px] text-xs text-muted text-left outline-none hover:bg-white/5 focus-visible:bg-white/10"
-              >
-                <ChevronLeft size={14} /> Delete this message?
-              </button>
-              <div className="border-t border-white/10 mt-1 pt-1">
-                <MenuItem icon={Trash2} onClick={() => { onDeleteForMe?.(message); closeMenu(); }}>Delete for me</MenuItem>
-                {isOwn && (
-                  <MenuItem icon={Trash2} danger onClick={() => { onDeleteForEveryone?.(message); closeMenu(); }}>
-                    Delete for everyone
-                  </MenuItem>
-                )}
-              </div>
-            </div>
-          )}
-        </MenuPopover>
+      {showReactions && (
+        <ReactionPicker
+          id={pickerId}
+          anchorRef={actionsRef}
+          fallbackRef={triggerRef}
+          align={isOwn ? "end" : "start"}
+          anchorKey={`${menuPos?.top}:${menuPos?.left}`}
+          onClose={closePicker}
+          onPick={(emoji) => {
+            onReact?.(message, emoji);
+            closePicker();
+          }}
+        />
       )}
 
       <ImageLightbox src={lightboxSrc} alt={message.attachment?.name} onClose={() => setLightboxSrc(null)} />
-    </div>
+    </motion.div>
   );
 };
 

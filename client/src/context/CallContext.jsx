@@ -526,8 +526,8 @@ export const CallProvider = ({ children }) => {
       }
     };
 
-    const onMediaState = ({ callId, muted: m, cameraOff: cam }) => {
-      if (callRef.current?.callId === callId) setRemoteMedia({ muted: !!m, cameraOff: !!cam });
+    const onMediaState = ({ callId, muted: m, cameraOff: cam, sharing }) => {
+      if (callRef.current?.callId === callId) setRemoteMedia({ muted: !!m, cameraOff: !!cam, sharing: !!sharing });
     };
 
     const onEnded = ({ callId, status, reason }) => {
@@ -638,7 +638,11 @@ export const CallProvider = ({ children }) => {
   const missedCount = useMemo(
     () =>
       history.filter(
-        (c) => c.status === "missed" && c.callee?.id === user?.id && new Date(c.startedAt).getTime() > missedSeenAt
+        (c) =>
+          new Date(c.startedAt).getTime() > missedSeenAt &&
+          ((c.status === "missed" && c.callee?.id === user?.id) ||
+            // Group calls: rung but never joined.
+            (c.isGroup && c.caller?.id !== user?.id && (c.participants || []).some((p) => p.user?.id === user?.id && p.status === "missed")))
       ).length,
     [history, user?.id, missedSeenAt]
   );
@@ -708,6 +712,8 @@ export const CallProvider = ({ children }) => {
       toggleMute,
       toggleCamera,
       switchCamera,
+      // Read-only handles for in-call extras (screen share needs the video sender).
+      getPeerConnection: () => pcRef.current,
     }),
     [
       call, callState, minimized, localStream, remoteStream, muted, cameraOff, remoteMedia, reconnecting,

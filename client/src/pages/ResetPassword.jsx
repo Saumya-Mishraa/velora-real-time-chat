@@ -2,6 +2,8 @@ import React, { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import api from "../services/api.js";
+import ValidationChecklist from "../components/ValidationChecklist.jsx";
+import { validatePassword, passwordChecklist } from "../utils/validators.js";
 
 const ResetPassword = () => {
   const [params] = useSearchParams();
@@ -13,11 +15,20 @@ const ResetPassword = () => {
   const [done, setDone] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  // Same rules as the server (utils/validators.js). Username/email checks
+  // need the account, so the server enforces those two on submit.
+  const passwordCheck = validatePassword(password);
+  const valid = !!token.trim() && passwordCheck.ok && password === confirm;
+
   const submit = async (e) => {
     e.preventDefault();
     setError("");
     if (password !== confirm) {
       setError("Passwords do not match.");
+      return;
+    }
+    if (!passwordCheck.ok) {
+      setError(passwordCheck.message);
       return;
     }
     setLoading(true);
@@ -57,6 +68,10 @@ const ResetPassword = () => {
               required
               className="w-full bg-sidebar border border-white/5 focus:border-ember/50 outline-none rounded-xl px-4 py-3 text-sm placeholder:text-muted transition-colors"
             />
+            {password && <ValidationChecklist items={passwordChecklist(password)} />}
+            {password && !passwordCheck.ok && /common/.test(passwordCheck.message || "") && (
+              <p className="text-xs text-red-400">{passwordCheck.message}</p>
+            )}
             <input
               type="password"
               value={confirm}
@@ -68,7 +83,7 @@ const ResetPassword = () => {
             {error && <p className="text-red-400 text-sm">{error}</p>}
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || !valid}
               className="w-full bg-ember text-bg font-medium rounded-xl py-3 hover:brightness-110 transition disabled:opacity-50"
             >
               {loading ? "Updating…" : "Update password"}

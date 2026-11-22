@@ -15,6 +15,9 @@ const memberSettingsSchema = new mongoose.Schema(
     // Cloudinary URL (or local-disk URL) of the chosen wallpaper image,
     // or "" for none (falls back to the app's default chat background).
     wallpaper: { type: String, default: "" },
+    // "Delete chat" (for this user only). The chat stays hidden from this
+    // user's list until a message newer than this date arrives.
+    deletedAt: { type: Date, default: null },
   },
   { _id: false }
 );

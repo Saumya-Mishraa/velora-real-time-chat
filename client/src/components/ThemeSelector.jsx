@@ -58,7 +58,12 @@ const ThemeSelector = () => {
                 )}
               </div>
 
-              <p className="font-display text-sm font-semibold">{t.name}</p>
+              <p className="font-display text-sm font-semibold flex items-center gap-2">
+                {t.name}
+                <span className="text-[9px] uppercase tracking-wide font-medium text-muted border border-white/10 rounded-full px-1.5 py-px">
+                  {t.mode === "light" ? "Light" : "Dark"}
+                </span>
+              </p>
               <p className="text-xs text-muted mt-0.5 leading-snug">{t.tagline}</p>
             </button>
           );

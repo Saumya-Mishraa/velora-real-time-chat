@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { MessageCircle, CircleDashed, Sparkles, Phone } from "lucide-react";
+import { MessageCircle, CircleDashed, Sparkles, Phone, Star } from "lucide-react";
 import Sidebar from "../components/Sidebar.jsx";
 import ChatWindow from "../components/ChatWindow.jsx";
 import NewChatModal from "../components/NewChatModal.jsx";
@@ -15,6 +15,10 @@ import MomentsPanel from "../components/MomentsPanel.jsx";
 import MomentDetail from "../components/MomentDetail.jsx";
 import MomentForm from "../components/MomentForm.jsx";
 import CallsPanel from "../components/CallsPanel.jsx";
+import StarredPanel from "../components/StarredPanel.jsx";
+import ForwardModal from "../components/ForwardModal.jsx";
+import ConfirmDialog from "../components/ConfirmDialog.jsx";
+import { mentionsUser } from "../utils/mentions.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useSocket } from "../context/SocketContext.jsx";
 import { useCall } from "../context/CallContext.jsx";
@@ -60,6 +64,7 @@ const parseRoute = (pathname) => {
   if (first === "c" && second) return { section: "chats", conversationId: second, momentId: null };
   if (first === "status") return { section: "status", conversationId: null, momentId: null };
   if (first === "moments") return { section: "moments", conversationId: null, momentId: second || null };
+  if (first === "starred") return { section: "starred", conversationId: null, momentId: null };
   if (first === "calls") return { section: "calls", conversationId: null, momentId: null };
   return { section: "chats", conversationId: null, momentId: null };
 };
@@ -87,6 +92,7 @@ const Dashboard = () => {
 
   const route = useMemo(() => parseRoute(location.pathname), [location.pathname]);
   const { section, conversationId, momentId } = route;
+  const jumpToId = useMemo(() => new URLSearchParams(location.search).get("m") || null, [location.search]);
 
   const [conversations, setConversations] = useState([]);
   const [convsLoaded, setConvsLoaded] = useState(false);
@@ -128,6 +134,44 @@ const Dashboard = () => {
     setFlash(text);
     setTimeout(() => setFlash(""), 4000);
   }, []);
+
+  // ---- forward / delete chat ---------------------------------------------
+  const [forwardMsg, setForwardMsg] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
+
+  const requestDeleteChat = useCallback((conversation) => {
+    setDeleteError("");
+    setDeleteTarget(conversation);
+  }, []);
+
+  const removeConversationLocal = useCallback(
+    (id) => {
+      setConversations((prev) => prev.filter((c) => c._id !== id));
+      if (activeRef.current?._id === id) {
+        setShowChatInfo(false);
+        navigate("/app", { replace: true });
+      }
+    },
+    [navigate]
+  );
+
+  const confirmDeleteChat = async () => {
+    if (!deleteTarget) return;
+    setDeleteBusy(true);
+    setDeleteError("");
+    try {
+      await api.delete(`/conversations/${deleteTarget._id}`);
+      removeConversationLocal(deleteTarget._id);
+      setDeleteTarget(null);
+      showFlash("Chat deleted.");
+    } catch (err) {
+      setDeleteError(err.response?.data?.message || err.response?.data?.error || "Couldn't delete this chat. Please try again.");
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
 
   // ---- data loading ---------------------------------------------------------
   const loadConversations = useCallback(async () => {
@@ -194,6 +238,12 @@ const Dashboard = () => {
       }
     };
 
+    // Deleted from another of this person's devices.
+    const handleConversationDeleted = ({ conversationId: deletedId }) => {
+      setConversations((prev) => prev.filter((c) => c._id !== deletedId));
+      if (activeRef.current?._id === deletedId) navigate("/app", { replace: true });
+    };
+
     const notifyIfAppropriate = (message, conversation) => {
       if (!conversation || message.type === "call") return;
       const me = userRef.current;
@@ -203,7 +253,9 @@ const Dashboard = () => {
       if (mutedUntil && new Date(mutedUntil) > new Date()) return;
       if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
       const title = conversation.isGroup
-        ? `${message.sender?.name || "Someone"} in ${conversation.name}`
+        ? mentionsUser(message, me)
+          ? `${message.sender?.name || "Someone"} mentioned you in ${conversation.name}`
+          : `${message.sender?.name || "Someone"} in ${conversation.name}`
         : message.sender?.name || "New message";
       const labels = { voice: "a voice message", image: "a photo", video: "a video", audio: "an audio file", file: "a file" };
       const body = message.type === "text" ? message.text : `Sent ${labels[message.type] || "an attachment"}`;
@@ -276,6 +328,7 @@ const Dashboard = () => {
     socket.on("conversation:updated", upsert);
     socket.on("conversation:settings", handleSettings);
     socket.on("group:removed", handleGroupRemoved);
+    socket.on("conversation:deleted", handleConversationDeleted);
     socket.on("message:new", handleNewMessage);
     socket.on("message:seen", clearUnreadOnSeenEcho);
     socket.on("message:edit", handleEdit);
@@ -293,6 +346,7 @@ const Dashboard = () => {
       socket.off("conversation:updated", upsert);
       socket.off("conversation:settings", handleSettings);
       socket.off("group:removed", handleGroupRemoved);
+      socket.off("conversation:deleted", handleConversationDeleted);
       socket.off("message:new", handleNewMessage);
       socket.off("message:seen", clearUnreadOnSeenEcho);
       socket.off("message:edit", handleEdit);
@@ -400,6 +454,12 @@ const Dashboard = () => {
       />
     ) : section === "calls" ? (
       <CallsPanel onOpenChat={(id) => goChat(id)} conversations={conversations} />
+    ) : section === "starred" ? (
+      <StarredPanel
+        conversations={conversations}
+        onBack={() => navigate("/app")}
+        onOpen={(cid, mid) => navigate(`/app/c/${cid}?m=${mid}`)}
+      />
     ) : null;
 
   let mainPane;
@@ -420,6 +480,8 @@ const Dashboard = () => {
     );
   } else if (section === "status") {
     mainPane = <EmptyPane icon={CircleDashed} title="Status" text="Updates disappear after 24 hours. Pick one from the list to view it." />;
+  } else if (section === "starred") {
+    mainPane = <EmptyPane icon={Star} title="Starred messages" text="Pick a starred message to jump straight to it in its chat." />;
   } else if (section === "calls") {
     mainPane = <EmptyPane icon={Phone} title="Calls" text="Tap the phone or video icon next to a call to ring them back." />;
   } else {
@@ -434,6 +496,9 @@ const Dashboard = () => {
           onOpenGroupDetails={() => setShowChatInfo(true)}
           onConversationUpdate={handleConversationUpdate}
           onOpenMoment={(id) => navigate(`/app/moments/${id}`)}
+          onForward={setForwardMsg}
+          jumpToId={jumpToId}
+          onJumpHandled={() => navigate(`/app/c/${conversationId}`, { replace: true })}
         />
         <ChatInfoPanel
           conversation={showChatInfo ? active : null}
@@ -444,6 +509,7 @@ const Dashboard = () => {
           onConversationUpdate={handleConversationUpdate}
           onClearedChat={handleClearedChat}
           onJumpToMessage={jumpToMessageInChat}
+          onRequestDeleteChat={requestDeleteChat}
         />
       </>
     );
@@ -470,6 +536,9 @@ const Dashboard = () => {
               onOpenNewChat={() => setShowNewChat(true)}
               onOpenNewGroup={() => setShowNewGroup(true)}
               onOpenSettings={() => setShowSettings(true)}
+              onOpenStarred={() => navigate("/app/starred")}
+              onRequestDeleteChat={requestDeleteChat}
+              onConversationUpdate={handleConversationUpdate}
               section={section}
               tabs={tabs}
               onSectionChange={goSection}
@@ -501,6 +570,25 @@ const Dashboard = () => {
       <NewChatModal open={showNewChat} onClose={() => setShowNewChat(false)} onCreated={upsertConversation} />
       <NewGroupModal open={showNewGroup} onClose={() => setShowNewGroup(false)} onCreated={upsertConversation} />
       <SettingsModal open={showSettings} onClose={() => setShowSettings(false)} />
+
+      <ForwardModal
+        open={!!forwardMsg}
+        message={forwardMsg}
+        conversations={conversations}
+        onClose={() => setForwardMsg(null)}
+        onDone={({ sent, failed, silent }) => !silent && showFlash(`Forwarded to ${sent} chat${sent > 1 ? "s" : ""}.`)}
+      />
+      <ConfirmDialog
+        open={!!deleteTarget}
+        danger
+        busy={deleteBusy}
+        error={deleteError}
+        title="Delete this chat?"
+        message="This removes the chat and all its messages from your account. The other person keeps their copy and isn't notified."
+        confirmLabel="Delete chat"
+        onConfirm={confirmDeleteChat}
+        onClose={() => setDeleteTarget(null)}
+      />
 
       <StatusComposer open={showStatusComposer} onClose={() => setShowStatusComposer(false)} contacts={contacts} />
       <AnimatePresence>

@@ -3,6 +3,7 @@ import { Phone, Video, PhoneIncoming, PhoneOutgoing, PhoneMissed, MessageCircle 
 import Avatar from "./Avatar.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useCall } from "../context/CallContext.jsx";
+import { useGroupCall } from "../context/GroupCallContext.jsx";
 import { fmtDuration } from "../utils/media.js";
 
 const dayLabel = (date) => {
@@ -15,7 +16,25 @@ const dayLabel = (date) => {
   return `${d.toLocaleDateString([], { month: "short", day: "numeric" })}, ${time}`;
 };
 
+// Group calls: no single peer; the row shows the group and who joined.
+const describeGroup = (call, meId) => {
+  const kind = call.mode === "video" ? "Group video" : "Group voice";
+  const outgoing = call.caller?.id === meId;
+  const mine = (call.participants || []).find((p) => p.user?.id === meId);
+  const joined = (call.participants || []).filter((p) => p.status === "joined").length;
+  if (!outgoing && mine?.status !== "joined") {
+    return { icon: PhoneMissed, text: mine?.status === "declined" ? `Declined ${kind.toLowerCase()} call` : `Missed ${kind.toLowerCase()} call`, danger: mine?.status !== "declined" };
+  }
+  if (call.status === "missed" || call.status === "canceled") return { icon: PhoneOutgoing, text: `${kind} · No answer`, danger: false };
+  return {
+    icon: outgoing ? PhoneOutgoing : PhoneIncoming,
+    text: `${kind} · ${joined} joined${call.duration ? ` · ${fmtDuration(call.duration)}` : ""}`,
+    danger: false,
+  };
+};
+
 const describe = (call, meId) => {
+  if (call.isGroup) return describeGroup(call, meId);
   const outgoing = call.caller.id === meId;
   const kind = call.mode === "video" ? "Video" : "Voice";
   switch (call.status) {
@@ -45,6 +64,7 @@ const describe = (call, meId) => {
 const CallsPanel = ({ onOpenChat, conversations }) => {
   const { user } = useAuth();
   const { history, historyLoaded, loadHistory, markCallsSeen, startCall, callState, missedCount } = useCall();
+  const { startGroupCall, inGroupCall, activeCalls } = useGroupCall();
 
   // Opening the tab refreshes the list and clears the missed-call badge.
   useEffect(() => {
@@ -59,7 +79,9 @@ const CallsPanel = ({ onOpenChat, conversations }) => {
   const rows = useMemo(
     () =>
       history.map((c) => {
-        const peer = c.caller.id === user.id ? c.callee : c.caller;
+        const peer = c.isGroup
+          ? { name: c.groupName || "Group call", avatar: c.groupAvatar }
+          : c.caller.id === user.id ? c.callee : c.caller;
         return { ...c, peer, info: describe(c, user.id) };
       }),
     [history, user.id]
@@ -67,7 +89,9 @@ const CallsPanel = ({ onOpenChat, conversations }) => {
 
   const callBack = (row, mode) => {
     const conversation = conversations.find((c) => c._id === row.conversation);
-    if (conversation) startCall(conversation, mode);
+    if (!conversation) return;
+    if (row.isGroup) startGroupCall(conversation._id, mode, conversation.name);
+    else startCall(conversation, mode);
   };
 
   return (
@@ -84,6 +108,7 @@ const CallsPanel = ({ onOpenChat, conversations }) => {
         rows.map((row) => {
           const Icon = row.info.icon;
           const available = conversations.some((c) => c._id === row.conversation);
+          const busy = callState !== "idle" || inGroupCall || (row.isGroup && !!activeCalls[row.conversation]);
           return (
             <div key={row._id} className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-white/5">
               <button
@@ -105,7 +130,7 @@ const CallsPanel = ({ onOpenChat, conversations }) => {
                 <div className="flex items-center flex-shrink-0">
                   <button
                     onClick={() => callBack(row, "audio")}
-                    disabled={callState !== "idle"}
+                    disabled={busy}
                     aria-label={`Voice call ${row.peer.name}`}
                     className="w-10 h-10 flex items-center justify-center rounded-full text-ember hover:bg-white/5 disabled:opacity-40"
                   >
@@ -113,7 +138,7 @@ const CallsPanel = ({ onOpenChat, conversations }) => {
                   </button>
                   <button
                     onClick={() => callBack(row, "video")}
-                    disabled={callState !== "idle"}
+                    disabled={busy}
                     aria-label={`Video call ${row.peer.name}`}
                     className="w-10 h-10 flex items-center justify-center rounded-full text-ember hover:bg-white/5 disabled:opacity-40"
                   >

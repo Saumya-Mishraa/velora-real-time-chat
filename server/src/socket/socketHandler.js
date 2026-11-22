@@ -6,6 +6,13 @@ import Conversation from "../models/Conversation.js";
 import { onlineUsers, addSocket, removeSocket, emitToUser, emitToUsers, joinUsersToConversation, leaveUsersFromConversation, isUserOnline } from "./registry.js";
 import { registerCallHandlers, handleCallDisconnect } from "./callHandler.js";
 import { normalizeAttachment } from "../utils/mediaUrl.js";
+import { buildMessageExtras, deriveMentionIds } from "../utils/messageExtras.js";
+import { shapeMessageForBroadcast } from "../utils/messageView.js";
+import { registerPollHandlers } from "./pollHandler.js";
+import { registerLocationHandlers } from "./locationHandler.js";
+import { registerWatchHandlers, handleWatchDisconnect } from "./watchHandler.js";
+import { registerGroupCallHandlers, handleGroupCallDisconnect } from "./groupCallHandler.js";
+import { registerCallExtrasHandlers } from "./callExtrasHandler.js";
 
 export { emitToUser, emitToUsers, joinUsersToConversation, leaveUsersFromConversation, isUserOnline };
 
@@ -181,6 +188,7 @@ export const initSocket = (io) => {
           text,
           attachment,
           replyTo,
+          ...buildMessageExtras(payload, { type, conversation, senderId: userId }),
           deliveredTo: Array.from(new Set([userId, ...onlineMemberIds])),
           readBy: [userId],
         });
@@ -193,8 +201,10 @@ export const initSocket = (io) => {
           { path: "replyTo" },
         ]);
 
-        io.to(`conversation:${conversationId}`).emit("message:new", populated);
-        ack?.({ message: populated });
+        // View-once media: the URL never travels in message:new / the ack.
+        const shaped = shapeMessageForBroadcast(populated);
+        io.to(`conversation:${conversationId}`).emit("message:new", shaped);
+        ack?.({ message: shaped });
       } catch (err) {
         ack?.({ error: err.message });
       }
@@ -274,11 +284,15 @@ export const initSocket = (io) => {
         message.text = (text || "").trim();
         message.edited = true;
         message.editedAt = new Date();
+        // Mentions follow the text — see deriveMentionIds.
+        const convo = await Conversation.findById(message.conversation);
+        message.mentions = await deriveMentionIds(message.text, convo, message.sender);
         await message.save();
         io.to(`conversation:${message.conversation}`).emit("message:edit", {
           messageId,
           text: message.text,
           editedAt: message.editedAt,
+          mentions: message.mentions,
         });
         ack?.({ message });
       } catch (err) {
@@ -374,10 +388,18 @@ export const initSocket = (io) => {
     });
 
     registerCallHandlers(io, socket, { blockedEitherWayIds });
+    // Feature modules (each validates auth, membership and block rules itself).
+    registerGroupCallHandlers(io, socket, { blockedEitherWayIds });
+    registerCallExtrasHandlers(io, socket);
+    registerPollHandlers(io, socket, { memberOf });
+    registerLocationHandlers(io, socket, { blockedEitherWayIds });
+    registerWatchHandlers(io, socket, { blockedEitherWayIds });
 
     socket.on("disconnect", async () => {
       try {
         handleCallDisconnect(io, userId, socket.id);
+        handleGroupCallDisconnect(io, userId, socket.id);
+        handleWatchDisconnect(io, userId, socket.id);
         const fullyOffline = removeSocket(userId, socket.id);
         if (fullyOffline) {
           const lastSeen = new Date();

@@ -4,6 +4,7 @@ import Message from "../models/Message.js";
 import User from "../models/User.js";
 import Call from "../models/Call.js";
 import { emitToUser, emitToUsers, getSocketIds } from "./registry.js";
+import { getUserGroupCallId } from "./callPresence.js";
 
 // ---------------------------------------------------------------------
 // Call signaling.
@@ -28,20 +29,32 @@ const userCalls = new Map(); // userId -> callId (both caller and callee while r
 
 export const getUserCallId = (userId) => userCalls.get(String(userId));
 
+// For in-call extras (reactions / hand / whiteboard): the live state of an
+// ANSWERED one-to-one call plus the other party's current socket, or null.
+export const peersOfOneToOneCall = (callId, userId) => {
+  const state = calls.get(callId);
+  if (!state || !state.answeredAt || !isParty(state, userId)) return null;
+  const other = otherParty(state, userId);
+  const sid = socketOf(state, other);
+  return { kind: "oneToOne", state, memberIds: [String(state.callerId), String(state.calleeId)], peerUserIds: [String(other)], peerSockets: sid ? [sid] : [] };
+};
+
 const userBrief = (u) => ({ id: String(u._id), name: u.name, username: u.username, avatar: u.avatar || "" });
 
-const publicCall = (doc, callerDoc, calleeDoc) => ({
+export const publicCall = (doc, callerDoc, calleeDoc, extra = {}) => ({
   _id: doc._id,
   callId: doc.callId,
   conversation: String(doc.conversation),
   caller: callerDoc ? userBrief(callerDoc) : { id: String(doc.caller) },
-  callee: calleeDoc ? userBrief(calleeDoc) : { id: String(doc.callee) },
+  // Group calls have no single callee.
+  callee: calleeDoc ? userBrief(calleeDoc) : doc.isGroup ? null : { id: String(doc.callee) },
   mode: doc.mode,
   status: doc.status,
   startedAt: doc.startedAt,
   answeredAt: doc.answeredAt,
   endedAt: doc.endedAt,
   duration: doc.duration,
+  ...(doc.isGroup ? { isGroup: true, participants: extra.participants || [], groupName: extra.groupName || "", groupAvatar: extra.groupAvatar || "" } : {}),
 });
 
 // Build ICE server list. STUN is always present; TURN is added when
@@ -152,7 +165,7 @@ export const registerCallHandlers = (io, socket, { blockedEitherWayIds }) => {
       const blocked = await blockedEitherWayIds(userId);
       if (blocked.has(calleeId)) return ack?.({ error: "You can't call this user." });
 
-      if (userCalls.has(userId)) return ack?.({ error: "You're already in a call." });
+      if (userCalls.has(userId) || getUserGroupCallId(userId)) return ack?.({ error: "You're already in a call." });
 
       const callId = crypto.randomUUID();
       const state = {
@@ -170,7 +183,7 @@ export const registerCallHandlers = (io, socket, { blockedEitherWayIds }) => {
       };
 
       // Callee already on another call -> busy, immediately.
-      if (userCalls.has(calleeId)) {
+      if (userCalls.has(calleeId) || getUserGroupCallId(calleeId)) {
         calls.set(callId, state);
         await finalize(io, state, "busy", "busy");
         const caller = await User.findById(userId).select("name username avatar");
@@ -249,11 +262,11 @@ export const registerCallHandlers = (io, socket, { blockedEitherWayIds }) => {
     if (target) io.to(target).emit("call:signal", { callId, data });
   });
 
-  socket.on("call:media-state", ({ callId, muted, cameraOff } = {}) => {
+  socket.on("call:media-state", ({ callId, muted, cameraOff, sharing } = {}) => {
     const state = calls.get(callId);
     if (!state || !isParty(state, userId)) return;
     const target = socketOf(state, otherParty(state, userId));
-    if (target) io.to(target).emit("call:media-state", { callId, muted: !!muted, cameraOff: !!cameraOff });
+    if (target) io.to(target).emit("call:media-state", { callId, muted: !!muted, cameraOff: !!cameraOff, sharing: !!sharing });
   });
 
   // After a socket reconnect the client re-attaches its new socket to the
@@ -299,10 +312,30 @@ export const handleCallDisconnect = (io, userId, socketId) => {
 };
 
 export const callHistoryFor = async (userId, limit = 100) => {
-  const docs = await Call.find({ $or: [{ caller: userId }, { callee: userId }] })
+  const docs = await Call.find({ $or: [{ caller: userId }, { callee: userId }, { "participants.user": userId }] })
     .sort({ startedAt: -1 })
     .limit(limit)
     .populate("caller", "name username avatar")
-    .populate("callee", "name username avatar");
-  return docs.map((d) => publicCall(d, d.caller, d.callee));
+    .populate("callee", "name username avatar")
+    .populate("participants.user", "name username avatar");
+
+  // Group calls show the group's name/avatar in the Calls tab.
+  const groupIds = [...new Set(docs.filter((d) => d.isGroup).map((d) => String(d.conversation)))];
+  const groups = groupIds.length ? await Conversation.find({ _id: { $in: groupIds } }).select("name avatar") : [];
+  const groupById = new Map(groups.map((g) => [String(g._id), g]));
+
+  return docs.map((d) => {
+    if (!d.isGroup) return publicCall(d, d.caller, d.callee);
+    const g = groupById.get(String(d.conversation));
+    return publicCall(d, d.caller, null, {
+      groupName: g?.name || "Group call",
+      groupAvatar: g?.avatar || "",
+      participants: (d.participants || []).map((p) => ({
+        user: p.user && p.user._id ? userBrief(p.user) : { id: String(p.user) },
+        status: p.status,
+        joinedAt: p.joinedAt,
+        leftAt: p.leftAt,
+      })),
+    });
+  });
 };

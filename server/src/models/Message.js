@@ -11,7 +11,7 @@ const messageSchema = new mongoose.Schema(
     sender: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     type: {
       type: String,
-      enum: ["text", "image", "video", "audio", "file", "voice", "call"],
+      enum: ["text", "image", "video", "audio", "file", "voice", "call", "poll", "location"],
       default: "text",
     },
     text: { type: String, trim: true, default: "" },
@@ -35,6 +35,43 @@ const messageSchema = new mongoose.Schema(
         enum: ["ended", "missed", "declined", "busy", "failed", "canceled"],
       },
       duration: { type: Number, default: 0 },
+      // Group calls (additive: old documents simply don't have these).
+      isGroup: { type: Boolean, default: false },
+      participantCount: { type: Number, default: 0 },
+    },
+
+    // View-once media (image/video only). The media URL stays in
+    // attachment.url but is NEVER sent to clients - see utils/messageView.js.
+    // Recipients get it once from POST /api/messages/single/:id/view-once.
+    viewOnce: { type: Boolean, default: false },
+    viewedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+
+    // Group polls (type === "poll").
+    poll: {
+      question: { type: String },
+      options: [
+        {
+          id: { type: String },
+          text: { type: String },
+          voters: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+        },
+      ],
+      multiple: { type: Boolean, default: false },
+      anonymous: { type: Boolean, default: false },
+      expiresAt: { type: Date },
+      closed: { type: Boolean, default: false },
+      closedAt: { type: Date },
+      closedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    },
+
+    // Live location (type === "location"). Coordinates are deliberately NOT
+    // stored here: they live only in memory (socket/locationStore.js) while
+    // the share is active, so nothing location-related survives expiry.
+    location: {
+      live: { type: Boolean, default: false },
+      startedAt: { type: Date },
+      expiresAt: { type: Date },
+      endedAt: { type: Date },
     },
 
     // Replies to a Status, and Moments shared into a chat.
@@ -85,12 +122,29 @@ const messageSchema = new mongoose.Schema(
     pinned: { type: Boolean, default: false },
     pinnedAt: { type: Date },
     pinnedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+
+    // Starred messages are private to each person. Never sent to the
+    // client as a list: the API exposes a per-viewer `starred` boolean.
+    starredBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+
+    // Forwarded copy of another message.
+    forwarded: { type: Boolean, default: false },
+
+    // @mentions (group chats): ids of the members mentioned in `text`.
+    mentions: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+
+    // GIFs / stickers are stored as plain "image" messages (attachment
+    // points at the external GIPHY URL) with an explicit flag.
+    gif: { type: Boolean, default: false },
+    sticker: { type: Boolean, default: false },
   },
   { timestamps: true }
 );
 
 messageSchema.index({ conversation: 1, createdAt: -1 });
 messageSchema.index({ conversation: 1, pinned: 1 });
+messageSchema.index({ "location.live": 1, "location.expiresAt": 1 }, { sparse: true });
+messageSchema.index({ starredBy: 1, createdAt: -1 });
 // Full-text search within a conversation's messages (see
 // messageController.searchMessages).
 messageSchema.index({ text: "text" });

@@ -1,9 +1,11 @@
 import express from "express";
 import { register, login, logout, me, forgotPassword, resetPassword } from "../controllers/authController.js";
+import { checkUsername } from "../controllers/authExtrasController.js";
 import { protect } from "../middleware/auth.js";
 
 const router = express.Router();
 
+router.get("/check-username", checkUsername);
 router.post("/register", register);
 router.post("/login", login);
 router.post("/logout", protect, logout);

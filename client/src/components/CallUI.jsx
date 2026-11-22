@@ -1,10 +1,15 @@
 import React, { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Phone, PhoneOff, Video, Mic, MicOff, VideoOff, SwitchCamera, ChevronDown, Maximize2, AlertCircle, X, Info,
+  Phone, PhoneOff, Video, Mic, MicOff, VideoOff, SwitchCamera, ChevronDown, Maximize2, AlertCircle, X, Info, Hand,
 } from "lucide-react";
 import Avatar from "./Avatar.jsx";
 import { useCall } from "../context/CallContext.jsx";
+import { useSocket } from "../context/SocketContext.jsx";
+import { useAuth } from "../context/AuthContext.jsx";
+import CallExtras, { ReactionsOverlay } from "./CallExtras.jsx";
+import useScreenShare from "../hooks/useScreenShare.js";
+import useCallExtras from "../hooks/useCallExtras.js";
 import { fmtDuration, mediaUrl } from "../utils/media.js";
 
 // Attaches a MediaStream to a <video>/<audio> element and (re)starts
@@ -78,7 +83,7 @@ const IncomingCall = () => {
       aria-label={`Incoming ${isVideo ? "video" : "voice"} call from ${call.peer?.name}`}
       className="fixed inset-x-0 top-0 z-[95] flex justify-center px-3 pt-[calc(env(safe-area-inset-top,0px)+0.75rem)] pointer-events-none"
     >
-      <div className="pointer-events-auto w-full max-w-md bg-sidebar/95 backdrop-blur border border-white/10 shadow-2xl rounded-2xl p-3 sm:p-4 flex items-center gap-3">
+      <div className="immersive pointer-events-auto w-full max-w-md bg-sidebar/95 backdrop-blur border border-white/10 shadow-2xl rounded-2xl p-3 sm:p-4 flex items-center gap-3">
         <div className="relative flex-shrink-0">
           <span className="absolute inset-0 rounded-full bg-ember/40 animate-ping" />
           <Avatar name={call.peer?.name} src={mediaUrl(call.peer?.avatar)} size={52} className="relative" />
@@ -115,16 +120,32 @@ const IncomingCall = () => {
 const CallScreen = () => {
   const {
     call, callState, localStream, remoteStream, muted, cameraOff, remoteMedia, reconnecting, seconds,
-    canSwitchCamera, facingMode, toggleMute, toggleCamera, switchCamera, endCall, setMinimized,
+    canSwitchCamera, facingMode, toggleMute, toggleCamera, switchCamera, endCall, setMinimized, getPeerConnection,
   } = useCall();
+  const { socket } = useSocket();
+  const { user } = useAuth();
+  const selfId = String(user.id);
+  const peerId = String(call?.peer?.id || call?.peer?._id || "");
+
+  // In-call extras (same components/hooks the group call uses).
+  const extras = useCallExtras({ socket, callId: call?.callId && callState === "active" ? call.callId : null, selfId });
+  // Screen share needs an existing video sender, so it's offered in video calls.
+  const screen = useScreenShare({
+    getPeerConnections: () => [getPeerConnection?.()].filter(Boolean),
+    getCameraTrack: () => (cameraOff ? null : localStream?.getVideoTracks()[0] || null),
+    onChange: (sharing) => {
+      // Tell the other side to show the (video) stream even if my camera is off.
+      if (call?.callId) socket?.emit("call:media-state", { callId: call.callId, muted, cameraOff: sharing ? false : cameraOff, sharing });
+    },
+  });
   const remoteVideoRef = useRef(null);
   const localVideoRef = useRef(null);
   const isVideo = call?.mode === "video";
   const hasRemoteVideo = !!remoteStream?.getVideoTracks().some((t) => t.readyState === "live");
-  const showRemoteVideo = isVideo && hasRemoteVideo && !remoteMedia.cameraOff;
+  const showRemoteVideo = isVideo && hasRemoteVideo && (!remoteMedia.cameraOff || remoteMedia.sharing);
 
   useStream(remoteVideoRef, remoteStream);
-  useStream(localVideoRef, localStream);
+  useStream(localVideoRef, screen.sharing ? screen.previewStream : localStream);
 
   if (!call) return null;
   const status = statusText({ callState, reconnecting, seconds, call });
@@ -137,7 +158,7 @@ const CallScreen = () => {
       transition={{ duration: 0.18 }}
       role="dialog"
       aria-label={`${isVideo ? "Video" : "Voice"} call with ${call.peer?.name}`}
-      className="fixed inset-0 z-[90] bg-bg text-white overflow-hidden flex flex-col"
+      className="immersive fixed inset-0 z-[90] bg-bg text-white overflow-hidden flex flex-col"
     >
       {/* Remote video (muted element: audio plays through <RemoteAudio/>) */}
       {isVideo && (
@@ -146,7 +167,7 @@ const CallScreen = () => {
           autoPlay
           playsInline
           muted
-          className={`absolute inset-0 w-full h-full object-cover bg-black ${showRemoteVideo ? "" : "invisible"}`}
+          className={`absolute inset-0 w-full h-full ${remoteMedia.sharing ? "object-contain" : "object-cover"} bg-black ${showRemoteVideo ? "" : "invisible"}`}
         />
       )}
 
@@ -185,6 +206,11 @@ const CallScreen = () => {
             <p className="font-medium truncate">{call.peer?.name}</p>
             <p className="text-xs text-white/70 tabular-nums">{status}</p>
           </div>
+        )}
+        {extras.hands[peerId] && callState === "active" && (
+          <span className="ml-auto flex items-center gap-1 text-xs bg-amber text-bg rounded-full px-2.5 py-1.5 font-medium" role="status">
+            <Hand size={12} /> {call.peer?.name?.split(" ")[0]} raised a hand
+          </span>
         )}
         {remoteMedia.muted && callState === "active" && (
           <span className="ml-auto flex items-center gap-1 text-xs bg-black/40 rounded-full px-2.5 py-1.5">
@@ -229,8 +255,22 @@ const CallScreen = () => {
         )}
       </AnimatePresence>
 
+      <ReactionsOverlay reactions={extras.reactions} nameOf={(id) => (String(id) === selfId ? "You" : call.peer?.name)} />
+
       {/* Controls */}
       <div className="relative z-10 px-3 pb-[calc(1.25rem+env(safe-area-inset-bottom,0px))] pt-8 bg-gradient-to-t from-black/70 to-transparent">
+        {callState === "active" && (
+          <CallExtras
+            socket={socket}
+            callId={call.callId}
+            conversationId={call.conversationId}
+            selfId={selfId}
+            extras={extras}
+            screen={screen}
+            canScreenShare={isVideo}
+            nameOf={(id) => (String(id) === selfId ? "You" : call.peer?.name)}
+          />
+        )}
         <div className="flex items-start justify-center gap-3 min-[360px]:gap-5 max-w-md mx-auto">
           <RoundButton onClick={toggleMute} label={muted ? "Unmute" : "Mute"} active={muted}>
             {muted ? <MicOff size={22} /> : <Mic size={22} />}
@@ -240,7 +280,7 @@ const CallScreen = () => {
               {cameraOff ? <VideoOff size={22} /> : <Video size={22} />}
             </RoundButton>
           )}
-          {isVideo && canSwitchCamera && (
+          {isVideo && canSwitchCamera && !screen.sharing && (
             <RoundButton onClick={switchCamera} label="Flip" disabled={cameraOff}>
               <SwitchCamera size={22} />
             </RoundButton>

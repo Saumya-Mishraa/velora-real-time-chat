@@ -3,6 +3,9 @@ import { Link, useNavigate, useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
 import { Eye, EyeOff } from "lucide-react";
 import { useAuth } from "../context/AuthContext.jsx";
+import ValidationChecklist from "../components/ValidationChecklist.jsx";
+import useUsernameAvailability from "../hooks/useUsernameAvailability.js";
+import { validateUsername, validateEmail, validatePassword, passwordChecklist, usernameChecklistItem } from "../utils/validators.js";
 
 const strength = (pw) => {
   let score = 0;
@@ -35,6 +38,19 @@ const Register = () => {
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
   const score = strength(form.password);
 
+  // Live validation (rules live in utils/validators.js, mirrored on the server).
+  const usernameCheck = validateUsername(form.username);
+  const usernameStatus = useUsernameAvailability(form.username);
+  const checklist = [...passwordChecklist(form.password), usernameChecklistItem(form.username)];
+  const passwordCheck = validatePassword(form.password, { username: usernameCheck.value, email: form.email });
+  const formValid =
+    form.name.trim().length > 0 &&
+    usernameCheck.ok &&
+    validateEmail(form.email).ok &&
+    passwordCheck.ok &&
+    form.password === form.confirmPassword &&
+    usernameStatus !== "taken";
+
   const submit = async (e) => {
     e.preventDefault();
     setError("");
@@ -42,9 +58,10 @@ const Register = () => {
       setError("Passwords do not match.");
       return;
     }
+    if (!formValid) return;
     setLoading(true);
     try {
-      await register(form);
+      await register({ ...form, username: usernameCheck.value });
       navigate(returnTo, { replace: true });
     } catch (err) {
       setError(err.response?.data?.message || "Registration failed. Please try again.");
@@ -74,18 +91,41 @@ const Register = () => {
 
         <form onSubmit={submit} className="space-y-4">
           {fields.map((f, i) => (
-            <motion.input
-              key={f.key}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.06 }}
-              type={f.type}
-              value={form[f.key]}
-              onChange={set(f.key)}
-              placeholder={f.placeholder}
-              required
-              className="w-full bg-sidebar border border-white/5 focus:border-ember/50 outline-none rounded-xl px-4 py-3 text-sm placeholder:text-muted transition-colors"
-            />
+            <React.Fragment key={f.key}>
+              <motion.input
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.06 }}
+                type={f.type}
+                value={form[f.key]}
+                onChange={set(f.key)}
+                placeholder={f.placeholder}
+                required
+                {...(f.key === "username"
+                  ? { autoCapitalize: "none", autoCorrect: "off", spellCheck: false, "aria-invalid": !!form.username && !usernameCheck.ok, "aria-describedby": "username-hint" }
+                  : {})}
+                className="w-full bg-sidebar border border-white/5 focus:border-ember/50 outline-none rounded-xl px-4 py-3 text-sm placeholder:text-muted transition-colors"
+              />
+              {f.key === "username" && form.username && (
+                <p
+                  id="username-hint"
+                  role="status"
+                  className={`text-xs -mt-2 ${
+                    !usernameCheck.ok || usernameStatus === "taken" ? "text-red-400" : usernameStatus === "available" ? "text-online" : "text-muted"
+                  }`}
+                >
+                  {!usernameCheck.ok
+                    ? usernameCheck.message
+                    : usernameStatus === "checking"
+                      ? "Checking availability…"
+                      : usernameStatus === "available"
+                        ? `@${usernameCheck.value} is available`
+                        : usernameStatus === "taken"
+                          ? "That username is already taken."
+                          : ""}
+                </p>
+              )}
+            </React.Fragment>
           ))}
 
           <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.18 }} className="relative">
@@ -121,6 +161,11 @@ const Register = () => {
             </div>
           )}
 
+          {(form.password || form.username) && <ValidationChecklist items={checklist} />}
+          {form.password && !passwordCheck.ok && /common|contain/.test(passwordCheck.message || "") && (
+            <p className="text-xs text-red-400 -mt-2">{passwordCheck.message}</p>
+          )}
+
           <motion.input
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
@@ -141,7 +186,7 @@ const Register = () => {
 
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || !formValid}
             className="w-full bg-ember text-bg font-medium rounded-xl py-3 hover:brightness-110 transition disabled:opacity-50"
           >
             {loading ? "Creating account…" : "Create account"}

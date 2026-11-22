@@ -2,6 +2,7 @@ import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import User from "../models/User.js";
 import { toPublicUrl } from "../utils/mediaUrl.js";
+import { validateUsername, validatePassword, validateEmail } from "../utils/validators.js";
 
 const signToken = (id) =>
   jwt.sign({ id }, process.env.JWT_SECRET, {
@@ -32,12 +33,18 @@ export const register = async (req, res) => {
     if (confirmPassword !== undefined && password !== confirmPassword) {
       return res.status(400).json({ message: "Passwords do not match." });
     }
-    if (password.length < 6) {
-      return res.status(400).json({ message: "Password must be at least 6 characters." });
-    }
+    // Single source of truth: utils/validators.js (login is intentionally
+    // NOT validated this way so existing users with older credentials can
+    // still sign in).
+    const usernameCheck = validateUsername(username);
+    if (!usernameCheck.ok) return res.status(400).json({ message: usernameCheck.message });
+    const emailCheck = validateEmail(email);
+    if (!emailCheck.ok) return res.status(400).json({ message: emailCheck.message });
+    const passwordCheck = validatePassword(password, { username: usernameCheck.value, email: emailCheck.value });
+    if (!passwordCheck.ok) return res.status(400).json({ message: passwordCheck.message });
 
     const existing = await User.findOne({
-      $or: [{ email: email.toLowerCase() }, { username: username.toLowerCase() }],
+      $or: [{ email: emailCheck.value }, { username: usernameCheck.value }],
     });
     if (existing) {
       return res.status(409).json({ message: "Email or username already in use." });
@@ -47,8 +54,8 @@ export const register = async (req, res) => {
 
     const user = await User.create({
       name,
-      username: username.toLowerCase(),
-      email: email.toLowerCase(),
+      username: usernameCheck.value,
+      email: emailCheck.value,
       password: hashed,
       avatar: req.body.avatar || "",
     });
@@ -139,6 +146,9 @@ export const resetPassword = async (req, res) => {
 
     const user = await User.findById(decoded.id);
     if (!user) return res.status(404).json({ message: "User not found." });
+
+    const passwordCheck = validatePassword(password, { username: user.username, email: user.email });
+    if (!passwordCheck.ok) return res.status(400).json({ message: passwordCheck.message });
 
     user.password = await bcrypt.hash(password, 10);
     await user.save();

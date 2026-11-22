@@ -15,6 +15,7 @@ import {
   setMuted,
   setWallpaper,
   clearChat,
+  deleteConversation,
 } from "../controllers/chatSettingsController.js";
 import { protect } from "../middleware/auth.js";
 
@@ -36,5 +37,6 @@ router.patch("/:id/archive", setArchived);
 router.patch("/:id/mute", setMuted);
 router.patch("/:id/wallpaper", setWallpaper);
 router.delete("/:id/clear", clearChat);
+router.delete("/:id", deleteConversation);
 
 export default router;

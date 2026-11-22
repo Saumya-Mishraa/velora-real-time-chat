@@ -2,6 +2,7 @@ import Conversation from "../models/Conversation.js";
 import Message from "../models/Message.js";
 import User from "../models/User.js";
 import { toStoredRef, toPublicUrl } from "../utils/mediaUrl.js";
+import { shapeMessage } from "../utils/messageView.js";
 import { joinUsersToConversation, leaveUsersFromConversation, emitToUsers } from "../socket/socketHandler.js";
 
 export const populateOpts = [
@@ -25,6 +26,12 @@ export const toClientShape = (conversation, userId, req = null) => {
     mutedUntil: mySettings?.mutedUntil || null,
     wallpaper: req ? toPublicUrl(mySettings?.wallpaper, req) : mySettings?.wallpaper || "",
   };
+  // A chat this user deleted: don't leak the old last-message preview.
+  if (mySettings?.deletedAt && obj.lastMessage?.createdAt && new Date(obj.lastMessage.createdAt) <= new Date(mySettings.deletedAt)) {
+    obj.lastMessage = null;
+  }
+  // Never let a view-once URL / poll votes / coordinates ride along in the preview.
+  if (obj.lastMessage) obj.lastMessage = shapeMessage(obj.lastMessage, userId, { noCoords: true });
   delete obj.settings;
   if (req) {
     obj.avatar = toPublicUrl(obj.avatar, req);
@@ -45,9 +52,16 @@ export const toClientShape = (conversation, userId, req = null) => {
 
 export const getConversations = async (req, res) => {
   try {
-    const conversations = await Conversation.find({ members: req.user._id })
+    const allConversations = await Conversation.find({ members: req.user._id })
       .populate(populateOpts)
       .sort({ updatedAt: -1 });
+
+    // Chats this user deleted stay hidden until a newer message arrives.
+    const conversations = allConversations.filter((c) => {
+      const deletedAt = c.settingsFor(req.user._id).deletedAt;
+      if (!deletedAt) return true;
+      return !!c.lastMessage?.createdAt && new Date(c.lastMessage.createdAt) > new Date(deletedAt);
+    });
 
     // Unread count per conversation, for the sidebar badge (section 14).
     // A message counts as unread if this user hasn't read it and hasn't

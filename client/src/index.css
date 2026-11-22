@@ -89,6 +89,78 @@
   --color-avatar-5: 255 154 158;
 }
 
+
+/* Light mode. Same token names, light values. Accent colors are a little
+   deeper than in the dark themes so small text keeps enough contrast on
+   white. */
+[data-theme="daylight"] {
+  color-scheme: light;
+  --color-bg: 243 245 249;
+  --color-sidebar: 255 255 255;
+  --color-chat: 236 239 245;
+  --color-accent: 224 70 36;
+  --color-accent-2: 196 118 8;
+  --color-accent-3: 109 76 214;
+  --color-ink: 20 24 36;
+  --color-muted: 99 107 124;
+  --color-online: 22 163 74;
+  --color-avatar-1: 224 70 36;
+  --color-avatar-2: 196 118 8;
+  --color-avatar-3: 109 76 214;
+  --color-avatar-4: 22 163 74;
+  --color-avatar-5: 37 99 235;
+}
+
+/* Full-screen dark surfaces (calls, status viewer, moment viewer) stay
+   dark in light mode: re-declare the dark tokens for their subtree. */
+[data-theme="daylight"] .immersive {
+  color-scheme: dark;
+  --color-bg: 9 10 15;
+  --color-sidebar: 16 18 24;
+  --color-chat: 19 21 28;
+  --color-accent: 255 107 74;
+  --color-accent-2: 255 184 107;
+  --color-accent-3: 181 140 255;
+  --color-ink: 244 241 234;
+  --color-muted: 133 136 149;
+  --color-online: 139 226 139;
+}
+
+/* The components express subtle borders / hovers / fills as translucent
+   white (right for dark UIs). In light mode swap them for translucent
+   slate so they stay visible. */
+[data-theme="daylight"] .border-white\/5:not(.immersive *),
+[data-theme="daylight"] .md\:border-white\/5:not(.immersive *) { border-color: rgb(15 23 42 / 0.08); }
+[data-theme="daylight"] .border-white\/10:not(.immersive *),
+[data-theme="daylight"] .hover\:border-white\/10:hover:not(.immersive *) { border-color: rgb(15 23 42 / 0.12); }
+[data-theme="daylight"] .border-white\/15:not(.immersive *),
+[data-theme="daylight"] .hover\:border-white\/15:hover:not(.immersive *) { border-color: rgb(15 23 42 / 0.16); }
+[data-theme="daylight"] .border-white\/20:not(.immersive *),
+[data-theme="daylight"] .hover\:border-white\/25:hover:not(.immersive *) { border-color: rgb(15 23 42 / 0.22); }
+[data-theme="daylight"] .divide-white\/5:not(.immersive *) > :not([hidden]) ~ :not([hidden]) { border-color: rgb(15 23 42 / 0.08); }
+[data-theme="daylight"] .ring-white\/10:not(.immersive *) { --tw-ring-color: rgb(15 23 42 / 0.12); }
+
+[data-theme="daylight"] .bg-white\/5:not(.immersive *),
+[data-theme="daylight"] .hover\:bg-white\/5:hover:not(.immersive *) { background-color: rgb(15 23 42 / 0.05); }
+[data-theme="daylight"] .bg-white\/10:not(.immersive *),
+[data-theme="daylight"] .hover\:bg-white\/10:hover:not(.immersive *) { background-color: rgb(15 23 42 / 0.08); }
+[data-theme="daylight"] .bg-white\/15:not(.immersive *) { background-color: rgb(15 23 42 / 0.1); }
+[data-theme="daylight"] .hover\:bg-white\/20:hover:not(.immersive *) { background-color: rgb(15 23 42 / 0.12); }
+[data-theme="daylight"] .bg-white\/25:not(.immersive *),
+[data-theme="daylight"] .hover\:bg-white\/25:hover:not(.immersive *) { background-color: rgb(15 23 42 / 0.15); }
+
+/* Red text/banners */
+[data-theme="daylight"] .text-red-300:not(.immersive *),
+[data-theme="daylight"] .text-red-400:not(.immersive *),
+[data-theme="daylight"] .hover\:text-red-400:hover:not(.immersive *) { color: rgb(220 38 38); }
+
+/* Incoming message bubbles: white card on the light chat background. */
+[data-theme="daylight"] .incoming-bubble {
+  background-color: #fff;
+  border-color: rgb(15 23 42 / 0.08);
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.06);
+}
+
 html, body, #root {
   height: 100%;
 }
@@ -200,4 +272,25 @@ html, body {
 @media (max-width: 639px) {
   .chat-scroll { scrollbar-width: none; }
   .chat-scroll::-webkit-scrollbar { display: none; }
+}
+
+/* ---- Phones / tablets only (< lg). Desktop (>= 1024px) is untouched. ----
+   When the on-screen keyboard is up on browsers that don't resize the
+   layout viewport (iOS Safari), hooks/useKeyboardViewport.js publishes
+   --vvh / --vv-top and flags <html data-kb="open">. The app shell then
+   fits the visible area so the composer is never hidden by the keyboard,
+   and the home-indicator padding (pointless above a keyboard) is dropped. */
+@media (max-width: 1023.98px) {
+  html[data-kb="open"],
+  html[data-kb="open"] body {
+    overflow: hidden;
+  }
+  html[data-kb="open"] .h-screen-safe {
+    height: var(--vvh, 100dvh);
+    position: relative;
+    top: var(--vv-top, 0px);
+  }
+  html[data-kb="open"] .composer-safe-pb {
+    padding-bottom: 0.625rem;
+  }
 }

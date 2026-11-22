@@ -11,12 +11,17 @@ import {
   getMessageInfo,
   searchMessages,
   getSharedContent,
+  starMessage,
+  getStarredMessages,
 } from "../controllers/messageController.js";
+import { openViewOnce } from "../controllers/viewOnceController.js";
 import { protect } from "../middleware/auth.js";
 
 const router = express.Router();
 
 router.use(protect);
+// Must stay above "/:conversationId" or "starred" is read as a conversation id.
+router.get("/starred", getStarredMessages);
 router.get("/:conversationId", getMessages);
 router.post("/:conversationId", createMessage);
 router.post("/:conversationId/read", markRead);
@@ -35,5 +40,14 @@ router.post("/single/:id/unpin", (req, res, next) => {
   next();
 }, pinMessage);
 router.get("/single/:id/info", getMessageInfo);
+router.post("/single/:id/view-once", openViewOnce);
+router.post("/single/:id/star", (req, res, next) => {
+  req.params.action = "star";
+  next();
+}, starMessage);
+router.post("/single/:id/unstar", (req, res, next) => {
+  req.params.action = "unstar";
+  next();
+}, starMessage);
 
 export default router;

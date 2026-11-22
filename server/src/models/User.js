@@ -10,6 +10,11 @@ const userSchema = new mongoose.Schema(
       trim: true,
       lowercase: true,
       minlength: 3,
+      // Backup of utils/validators.js. Mongoose only validates paths that
+      // are modified on save(), so existing users with older usernames
+      // keep working; only new/changed usernames are held to the rule.
+      maxlength: [20, "Username must be at most 20 characters."],
+      match: [/^[a-z0-9._]+$/, "Username can only contain letters, numbers, \".\" and \"_\"."],
     },
     email: {
       type: String,

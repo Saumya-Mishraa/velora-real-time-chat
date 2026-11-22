@@ -2,12 +2,25 @@ import Message from "../models/Message.js";
 import Conversation from "../models/Conversation.js";
 import { normalizeAttachment } from "../utils/mediaUrl.js";
 import { emitToUsers } from "../socket/registry.js";
+import { buildMessageExtras, deriveMentionIds } from "../utils/messageExtras.js";
+import { shapeMessage, shapeMessageForBroadcast, needsBlockSet } from "../utils/messageView.js";
+import { blockedEitherWayIds } from "../utils/blocks.js";
 
 const isMember = (conversation, userId) =>
   conversation.members.some((m) => String(m) === String(userId));
 
 const isGroupAdmin = (conversation, userId) =>
   conversation.isGroup && conversation.admins.some((a) => String(a) === String(userId));
+
+// Stars are private: replace the raw `starredBy` list with a per-viewer
+// `starred` boolean before a message leaves the API.
+const forViewer = (message, userId, opts = {}) => {
+  const obj = message?.toObject ? message.toObject() : { ...message };
+  obj.starred = (obj.starredBy || []).some((u) => String(u?._id || u) === String(userId));
+  delete obj.starredBy;
+  // View-once URLs, poll votes and live coordinates are shaped per viewer.
+  return shapeMessage(obj, userId, opts);
+};
 
 // Messages this user has "deleted for me" are excluded entirely from
 // anything sent back to them — never just hidden client-side.
@@ -35,7 +48,8 @@ export const getMessages = async (req, res) => {
       .populate("sender", "name username avatar")
       .populate("replyTo");
 
-    res.json({ messages: messages.reverse() });
+    const blockedIds = needsBlockSet(messages) ? await blockedEitherWayIds(req.user._id) : null;
+    res.json({ messages: messages.reverse().map((m) => forViewer(m, req.user._id, { blockedIds })) });
   } catch (err) {
     res.status(500).json({ message: "Failed to load messages.", error: err.message });
   }
@@ -71,6 +85,7 @@ export const createMessage = async (req, res) => {
       text,
       attachment,
       replyTo,
+      ...buildMessageExtras(req.body, { type, conversation, senderId: req.user._id }),
       deliveredTo: [req.user._id],
       readBy: [req.user._id],
     });
@@ -80,8 +95,10 @@ export const createMessage = async (req, res) => {
 
     const populated = await message.populate("sender", "name username avatar");
     // REST-created messages reach the other members in real time too.
-    req.app.get("io")?.to(`conversation:${conversationId}`).emit("message:new", populated);
-    res.status(201).json({ message: populated });
+    // Viewer-neutral shaping: a fresh view-once message must not carry its URL.
+    const shaped = shapeMessageForBroadcast(populated);
+    req.app.get("io")?.to(`conversation:${conversationId}`).emit("message:new", shaped);
+    res.status(201).json({ message: shaped });
   } catch (err) {
     res.status(500).json({ message: "Failed to send message.", error: err.message });
   }
@@ -117,7 +134,7 @@ export const deleteMessage = async (req, res) => {
       }
     }
 
-    res.json({ message });
+    res.json({ message: forViewer(message, req.user._id) });
   } catch (err) {
     res.status(500).json({ message: "Failed to delete message.", error: err.message });
   }
@@ -140,15 +157,20 @@ export const editMessage = async (req, res) => {
     message.text = (req.body.text || "").trim();
     message.edited = true;
     message.editedAt = new Date();
+    // Mentions follow the text: re-derive them so an edit never leaves a
+    // stale mention behind.
+    const convo = await Conversation.findById(message.conversation);
+    message.mentions = await deriveMentionIds(message.text, convo, message.sender);
     await message.save();
 
     req.app.get("io")?.to(`conversation:${message.conversation}`).emit("message:edit", {
       messageId: message._id,
       text: message.text,
       editedAt: message.editedAt,
+      mentions: message.mentions,
     });
 
-    res.json({ message });
+    res.json({ message: forViewer(message, req.user._id) });
   } catch (err) {
     res.status(500).json({ message: "Failed to edit message.", error: err.message });
   }
@@ -177,7 +199,7 @@ export const pinMessage = async (req, res) => {
       pinned: pin,
     });
 
-    res.json({ message });
+    res.json({ message: forViewer(message, req.user._id) });
   } catch (err) {
     res.status(500).json({ message: "Failed to update pin.", error: err.message });
   }
@@ -198,7 +220,7 @@ export const getPinnedMessages = async (req, res) => {
       .sort({ pinnedAt: -1 })
       .populate("sender", "name username avatar")
       .populate("pinnedBy", "name username");
-    res.json({ messages });
+    res.json({ messages: messages.map((m) => forViewer(m, req.user._id)) });
   } catch (err) {
     res.status(500).json({ message: "Failed to load pinned messages.", error: err.message });
   }
@@ -224,7 +246,7 @@ export const reactToMessage = async (req, res) => {
     }
 
     await message.save();
-    res.json({ message });
+    res.json({ message: forViewer(message, req.user._id) });
   } catch (err) {
     res.status(500).json({ message: "Failed to react.", error: err.message });
   }
@@ -291,7 +313,7 @@ export const searchMessages = async (req, res) => {
     const regex = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
     const messages = await Message.find({
       conversation: conversationId,
-      $or: [{ text: regex }, { "attachment.name": regex }],
+      $or: [{ text: regex }, { "attachment.name": regex, viewOnce: { $ne: true } }],
       deletedFor: { $ne: req.user._id },
       deletedForEveryone: { $ne: true },
     })
@@ -299,7 +321,7 @@ export const searchMessages = async (req, res) => {
       .limit(50)
       .populate("sender", "name username avatar");
 
-    res.json({ messages });
+    res.json({ messages: messages.map((m) => forViewer(m, req.user._id)) });
   } catch (err) {
     res.status(500).json({ message: "Search failed.", error: err.message });
   }
@@ -314,10 +336,12 @@ export const getSharedContent = async (req, res) => {
       return res.status(403).json({ message: "Not a member of this conversation." });
     }
 
+    // View-once media never appears in the shared-content panel / chat info.
     const base = {
       conversation: conversationId,
       deletedFor: { $ne: req.user._id },
       deletedForEveryone: { $ne: true },
+      viewOnce: { $ne: true },
     };
 
     const [media, files, linkMessages] = await Promise.all([
@@ -337,5 +361,66 @@ export const getSharedContent = async (req, res) => {
     res.json({ media, files, links });
   } catch (err) {
     res.status(500).json({ message: "Failed to load shared content.", error: err.message });
+  }
+};
+
+// ---- Starred messages (private to each person) ---------------------------
+
+// POST /messages/single/:id/star | /unstar
+export const starMessage = async (req, res) => {
+  try {
+    const message = await Message.findById(req.params.id);
+    if (!message) return res.status(404).json({ message: "Message not found." });
+    const conversation = await Conversation.findById(message.conversation);
+    if (!conversation || !isMember(conversation, req.user._id)) {
+      return res.status(403).json({ message: "Not a member of this conversation." });
+    }
+    if (message.deletedForEveryone || message.deleted) {
+      return res.status(400).json({ message: "Can't star a deleted message." });
+    }
+    if (message.viewOnce) {
+      return res.status(400).json({ message: "View-once messages can't be starred." });
+    }
+    if (message.deletedFor.some((u) => String(u) === String(req.user._id))) {
+      return res.status(404).json({ message: "Message not found." });
+    }
+
+    const starred = req.params.action !== "unstar";
+    await Message.updateOne(
+      { _id: message._id },
+      starred ? { $addToSet: { starredBy: req.user._id } } : { $pull: { starredBy: req.user._id } }
+    );
+
+    // Stars are private — only this person's other tabs/devices hear about it.
+    emitToUsers(req.app.get("io"), [req.user._id], "message:star", {
+      messageId: message._id,
+      conversationId: message.conversation,
+      starred,
+    });
+
+    res.json({ messageId: message._id, starred });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to update star.", error: err.message });
+  }
+};
+
+// GET /messages/starred — every message this person starred, across chats.
+export const getStarredMessages = async (req, res) => {
+  try {
+    const conversations = await Conversation.find({ members: req.user._id }).select("_id");
+    const messages = await Message.find({
+      conversation: { $in: conversations.map((c) => c._id) },
+      starredBy: req.user._id,
+      deletedFor: { $ne: req.user._id },
+      deletedForEveryone: { $ne: true },
+      deleted: { $ne: true },
+      viewOnce: { $ne: true },
+    })
+      .sort({ createdAt: -1 })
+      .limit(500)
+      .populate("sender", "name username avatar");
+    res.json({ messages: messages.map((m) => forViewer(m, req.user._id)) });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to load starred messages.", error: err.message });
   }
 };

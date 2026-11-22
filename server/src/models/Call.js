@@ -9,7 +9,20 @@ const callSchema = new mongoose.Schema(
     callId: { type: String, required: true, unique: true },
     conversation: { type: mongoose.Schema.Types.ObjectId, ref: "Conversation", required: true },
     caller: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
-    callee: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    // Group calls have no single callee (see `participants`); the field stays
+    // required-free so old one-to-one documents and new group ones coexist.
+    callee: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    isGroup: { type: Boolean, default: false },
+    // Group calls: everyone who was rung or joined.
+    participants: [
+      {
+        _id: false,
+        user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        joinedAt: { type: Date },
+        leftAt: { type: Date },
+        status: { type: String, enum: ["joined", "missed", "declined"], default: "missed" },
+      },
+    ],
     mode: { type: String, enum: ["audio", "video"], required: true },
     status: {
       type: String,
@@ -27,5 +40,6 @@ const callSchema = new mongoose.Schema(
 
 callSchema.index({ caller: 1, startedAt: -1 });
 callSchema.index({ callee: 1, startedAt: -1 });
+callSchema.index({ "participants.user": 1, startedAt: -1 });
 
 export default mongoose.model("Call", callSchema);

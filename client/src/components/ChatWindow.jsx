@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowLeft, Info, Wifi, WifiOff, Loader2, Search, ChevronDown, ChevronUp, X, ArrowDown, Pin, Phone, Video, SearchX } from "lucide-react";
+import { ArrowLeft, Info, Wifi, WifiOff, Loader2, Search, ChevronDown, ChevronUp, X, ArrowDown, Pin, Phone, Video, SearchX, MonitorPlay } from "lucide-react";
 import Avatar from "./Avatar.jsx";
 import OnlineIndicator from "./OnlineIndicator.jsx";
 import MessageBubble from "./MessageBubble.jsx";
@@ -10,6 +10,11 @@ import MessageInfoModal from "./MessageInfoModal.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useSocket } from "../context/SocketContext.jsx";
 import { useCall } from "../context/CallContext.jsx";
+import { useGroupCall } from "../context/GroupCallContext.jsx";
+import { useWatchTogether } from "../context/WatchTogetherContext.jsx";
+import { GroupCallBanner } from "./GroupCallUI.jsx";
+import useChatExtras from "../hooks/useChatExtras.js";
+import { withStar } from "../utils/messageKinds.js";
 import api from "../services/api.js";
 import { mediaUrl } from "../utils/media.js";
 
@@ -32,31 +37,12 @@ const timeAgo = (date) => {
 // because of sub-pixel scroll rounding.
 const BOTTOM_THRESHOLD = 120;
 
-const dayKey = (date) => {
-  const d = new Date(date);
-  return Number.isNaN(d.getTime()) ? "" : `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-};
-
-const dayLabel = (date) => {
-  const d = new Date(date);
-  if (Number.isNaN(d.getTime())) return "";
-  const today = new Date();
-  const yesterday = new Date();
-  yesterday.setDate(today.getDate() - 1);
-  if (dayKey(d) === dayKey(today)) return "Today";
-  if (dayKey(d) === dayKey(yesterday)) return "Yesterday";
-  return d.toLocaleDateString([], {
-    weekday: "short",
-    day: "numeric",
-    month: "short",
-    ...(d.getFullYear() !== today.getFullYear() ? { year: "numeric" } : {}),
-  });
-};
-
-const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, onOpenMoment, loadingConversation }) => {
+const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, onConversationUpdate, onOpenMoment, loadingConversation, onForward, jumpToId, onJumpHandled }) => {
   const { user } = useAuth();
   const { socket, connectionState } = useSocket();
   const { startCall, callState } = useCall();
+  const { startGroupCall, inGroupCall, activeCalls } = useGroupCall();
+  const { sessions: watchSessions, openWatch, refreshSession } = useWatchTogether();
   // Effects below depend on the conversation's *id*; the full object is
   // read from a ref so settings/members updates (wallpaper, pin, mute,
   // name changes...) never re-fetch messages or tear down listeners.
@@ -65,8 +51,6 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
   const conversationId = conversation?._id;
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [loadingOlder, setLoadingOlder] = useState(false);
-  const [, setHasMoreOlder] = useState(true);
   const [replyTo, setReplyTo] = useState(null);
   const [typingUsers, setTypingUsers] = useState(new Map());
   const [atBottom, setAtBottom] = useState(true);
@@ -78,9 +62,17 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
   const [searchResults, setSearchResults] = useState([]);
   const [searchIndex, setSearchIndex] = useState(0);
   const [sendError, setSendError] = useState("");
+  const [toast, setToast] = useState("");
   const [searching, setSearching] = useState(false);
   const [searchDone, setSearchDone] = useState(false);
   const searchSeq = useRef(0);
+
+  // Live updates for polls, view-once, live location (see hooks/useChatExtras.js).
+  useChatExtras(socket, conversationId, setMessages, user.id);
+  // Late joiners: is a watch party already running in this chat?
+  useEffect(() => {
+    if (conversationId) refreshSession(conversationId);
+  }, [conversationId, refreshSession]);
   const searchDebounce = useRef(null);
   const [pinnedBarMessages, setPinnedBarMessages] = useState([]);
 
@@ -88,10 +80,6 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
   const bottomRef = useRef(null);
   const typingClearTimeouts = useRef(new Map());
   const deliveredAckedIds = useRef(new Set());
-  const loadingOlderRef = useRef(false);
-  const hasMoreOlderRef = useRef(true);
-  const messagesRef = useRef(messages);
-  messagesRef.current = messages;
 
   const isBlocked =
     !conversation?.isGroup &&
@@ -122,13 +110,8 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
     let cancelled = false;
     setLoading(true);
     setMessages([]);
-    setLoadingOlder(false);
-    setHasMoreOlder(true);
-    hasMoreOlderRef.current = true;
-    loadingOlderRef.current = false;
     setNewMessageCount(0);
     setAtBottom(true);
-    stickToBottomRef.current = true;
     setShowSearch(false);
     setSearchQuery("");
     setSearchResults([]);
@@ -138,13 +121,7 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
 
     api
       .get(`/messages/${conversationId}`)
-      .then(({ data }) => {
-        if (cancelled) return;
-        mergeMessages(data.messages || []);
-        const hasOlder = (data.messages || []).length >= 30;
-        hasMoreOlderRef.current = hasOlder;
-        setHasMoreOlder(hasOlder);
-      })
+      .then(({ data }) => !cancelled && setMessages(data.messages))
       .catch(() => {})
       .finally(() => !cancelled && setLoading(false));
 
@@ -156,7 +133,7 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
     return () => {
       cancelled = true;
     };
-  }, [conversationId, mergeMessages]);
+  }, [conversationId]);
 
   // (Re)join the room whenever the socket (re)connects or this chat opens.
   useEffect(() => {
@@ -297,7 +274,13 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
       }
     };
 
+    // Starred on another device (stars are private to the person).
+    const handleStar = ({ messageId, starred }) => {
+      setMessages((prev) => prev.map((m) => (m._id === messageId ? withStar(m, user.id, !!starred) : m)));
+    };
+
     socket.on("message:new", handleNew);
+    socket.on("message:star", handleStar);
     socket.on("typing:start", handleTypingStart);
     socket.on("typing:stop", handleTypingStop);
     socket.on("message:reaction", handleReaction);
@@ -309,6 +292,7 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
 
     return () => {
       socket.off("message:new", handleNew);
+      socket.off("message:star", handleStar);
       socket.off("typing:start", handleTypingStart);
       socket.off("typing:stop", handleTypingStop);
       socket.off("message:reaction", handleReaction);
@@ -341,62 +325,21 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, conversationId]);
 
-  const loadOlderMessages = useCallback(async () => {
-    const scroller = scrollRef.current;
-    const firstMessage = messagesRef.current[0];
-    const activeConversationId = conversationRef.current?._id;
-    if (!scroller || !firstMessage || !activeConversationId || !hasMoreOlderRef.current || loadingOlderRef.current) return;
-
-    loadingOlderRef.current = true;
-    setLoadingOlder(true);
-    const previousScrollHeight = scroller.scrollHeight;
-    const previousScrollTop = scroller.scrollTop;
-
-    try {
-      const { data } = await api.get(`/messages/${activeConversationId}`, {
-        params: { before: firstMessage.createdAt, limit: 50 },
-      });
-      if (conversationRef.current?._id !== activeConversationId) return;
-      const olderMessages = data.messages || [];
-      const hasOlder = olderMessages.length >= 50;
-      hasMoreOlderRef.current = hasOlder;
-      setHasMoreOlder(hasOlder);
-
-      if (olderMessages.length) {
-        mergeMessages(olderMessages);
-        // Keep the same message under the user's eyes after prepending history.
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            const currentScroller = scrollRef.current;
-            if (!currentScroller) return;
-            currentScroller.scrollTop = previousScrollTop + (currentScroller.scrollHeight - previousScrollHeight);
-          });
-        });
-      }
-    } catch {
-      // A transient history request failure should not break the chat.
-      // The next scroll-to-top attempt can retry it.
-    } finally {
-      loadingOlderRef.current = false;
-      if (conversationRef.current?._id === activeConversationId) setLoadingOlder(false);
-    }
-  }, [mergeMessages]);
-
   const handleScroll = () => {
     const scroller = scrollRef.current;
     if (!scroller) return;
     const isAtBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < BOTTOM_THRESHOLD;
     setAtBottom(isAtBottom);
-    stickToBottomRef.current = isAtBottom;
     if (isAtBottom) setNewMessageCount(0);
-    if (scroller.scrollTop < 100) loadOlderMessages();
   };
 
   const scrollToBottom = () => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
     setNewMessageCount(0);
   };
 
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
   const ensureLoadedRef = useRef(null);
 
   const jumpToMessage = useCallback(async (messageId) => {
@@ -498,31 +441,21 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
 
   ensureLoadedRef.current = ensureMessageLoaded;
 
-  // Keep the newest message in view: always after *I* send something, and
-  // for incoming messages only when the reader was already at the bottom.
-  const stickToBottomRef = useRef(true);
-  const lastMessage = messages[messages.length - 1];
-  const lastMessageId = lastMessage?._id;
-  const lastIsMine = lastMessage ? String(lastMessage.sender?._id || lastMessage.sender) === String(user.id) : false;
+  // Opened from the Starred list: scroll to (and flash) that message.
   useEffect(() => {
-    if (loading || !lastMessageId) return;
-    if (!lastIsMine && !stickToBottomRef.current) return;
-    const scroller = scrollRef.current;
-    if (!scroller) return;
-    const go = () => scroller.scrollTo({ top: scroller.scrollHeight, behavior: "auto" });
-    go();
-    // Images/avatars can change the height a moment later.
-    const raf = requestAnimationFrame(go);
-    const t = setTimeout(go, 150);
-    if (lastIsMine) {
-      stickToBottomRef.current = true;
-      setNewMessageCount(0);
-    }
-    return () => {
-      cancelAnimationFrame(raf);
-      clearTimeout(t);
-    };
-  }, [lastMessageId, lastIsMine, loading]);
+    if (loading || !jumpToId) return undefined;
+    const t = setTimeout(async () => {
+      await jumpToMessage(jumpToId);
+      onJumpHandled?.();
+    }, 200);
+    return () => clearTimeout(t);
+  }, [loading, jumpToId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!toast) return undefined;
+    const t = setTimeout(() => setToast(""), 3500);
+    return () => clearTimeout(t);
+  }, [toast]);
 
   if (!conversation && loadingConversation) {
     return (
@@ -547,25 +480,17 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
   const label = conversation.isGroup ? conversation.name : other?.name;
   const isOnline = other && onlineUserIds.has(String(other.id || other._id));
   const typingNames = Array.from(typingUsers.values());
-  const memberNames = Object.fromEntries(
-    (conversation.members || []).map((m) => [String(m.id || m._id), m.name])
-  );
 
   const send = (payload) => {
-    const activeConversationId = conversationRef.current?._id;
     if (!socket?.connected) {
       setSendError("You're offline. Reconnecting — try again in a moment.");
       return false;
     }
-    if (!activeConversationId) return false;
-
-    setSendError("");
-    socket.emit("message:send", { conversationId: activeConversationId, ...payload }, (res) => {
-      // Ignore a late acknowledgement if the user has switched chats.
-      if (conversationRef.current?._id !== activeConversationId) return;
+    socket.emit("message:send", { conversationId: conversation._id, ...payload }, (res) => {
       if (res?.error) setSendError(res.error);
       else if (res?.message) mergeMessages([res.message]);
     });
+    setSendError("");
     return true;
   };
 
@@ -575,7 +500,7 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
 
   const handleDeleteForMe = (message) => {
     socket?.emit("message:delete", { messageId: message._id, mode: "me" }, (res) => {
-      if (res?.error) return setSendError(res.error);
+      if (res?.error) return alert(res.error);
       setMessages((prev) => prev.filter((m) => m._id !== message._id));
     });
   };
@@ -584,30 +509,8 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
     socket?.emit("message:delete", { messageId: message._id, mode: "everyone" });
   };
 
-  // Optimistic: the reaction appears instantly and the server's
-  // "message:reaction" event then confirms (or corrects) it. Same emoji
-  // again removes it; a different one replaces it (one reaction per person).
   const handleReact = (message, emoji) => {
-    if (!socket?.connected) {
-      setSendError("You're offline. Reconnecting — try again in a moment.");
-      return;
-    }
-    setMessages((prev) =>
-      prev.map((m) => {
-        if (m._id !== message._id) return m;
-        const list = m.reactions || [];
-        const mine = list.find((r) => String(r.user?._id || r.user?.id || r.user) === String(user.id));
-        const others = list.filter((r) => r !== mine);
-        const next = mine?.emoji === emoji ? others : [...others, { user: user.id, emoji }];
-        return { ...m, reactions: next };
-      })
-    );
-    socket.emit("message:react", { messageId: message._id, emoji }, (res) => {
-      if (res?.error) {
-        setSendError(res.error);
-        api.get(`/messages/${conversationRef.current?._id}`).then(({ data }) => mergeMessages(data.messages)).catch(() => {});
-      }
-    });
+    socket?.emit("message:react", { messageId: message._id, emoji });
   };
 
   const handleEdit = (message, text) => {
@@ -615,15 +518,30 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
   };
 
   const handlePin = (message) => {
-    socket?.emit("message:pin", { messageId: message._id }, (res) => res?.error && setSendError(res.error));
+    socket?.emit("message:pin", { messageId: message._id }, (res) => res?.error && alert(res.error));
+  };
+
+  const handleStar = async (message, starred) => {
+    setMessages((prev) => prev.map((m) => (m._id === message._id ? withStar(m, user.id, starred) : m)));
+    try {
+      await api.post(`/messages/single/${message._id}/${starred ? "star" : "unstar"}`);
+    } catch {
+      setMessages((prev) => prev.map((m) => (m._id === message._id ? withStar(m, user.id, !starred) : m)));
+      setToast(starred ? "Couldn't star that message." : "Couldn't remove the star.");
+    }
   };
 
   const handleUnpin = (message) => {
-    socket?.emit("message:unpin", { messageId: message._id }, (res) => res?.error && setSendError(res.error));
+    socket?.emit("message:unpin", { messageId: message._id }, (res) => res?.error && alert(res.error));
   };
 
   const wallpaper = mediaUrl(conversation.mySettings?.wallpaper);
-  const canCall = !conversation.isGroup && !isBlocked && callState === "idle" && connectionState === "connected";
+  const canCall = !conversation.isGroup && !isBlocked && callState === "idle" && !inGroupCall && connectionState === "connected";
+  // Group calls: not while in another call, and not if one is already running here (use the Join banner).
+  const groupCallRunning = !!activeCalls[conversationId];
+  const canGroupCall = conversation.isGroup && callState === "idle" && !inGroupCall && !groupCallRunning && connectionState === "connected";
+  const watchSession = watchSessions[conversationId];
+  const isGroupAdmin = (conversation.admins || []).some((a) => String(a?._id || a?.id || a) === String(user.id));
 
   return (
     <div
@@ -657,6 +575,29 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
           </p>
         </button>
 
+        {conversation.isGroup && (
+          <>
+            <button
+              onClick={() => startGroupCall(conversationId, "audio", conversation.name)}
+              disabled={!canGroupCall}
+              className="w-9 h-9 min-[400px]:w-10 min-[400px]:h-10 flex items-center justify-center flex-shrink-0 rounded-full text-muted hover:text-ember hover:bg-white/5 transition-colors disabled:opacity-40 disabled:hover:text-muted disabled:hover:bg-transparent"
+              title={groupCallRunning ? "A call is already running — use Join call" : "Group voice call"}
+              aria-label="Start group voice call"
+            >
+              <Phone size={18} />
+            </button>
+            <button
+              onClick={() => startGroupCall(conversationId, "video", conversation.name)}
+              disabled={!canGroupCall}
+              className="w-9 h-9 min-[400px]:w-10 min-[400px]:h-10 flex items-center justify-center flex-shrink-0 rounded-full text-muted hover:text-ember hover:bg-white/5 transition-colors disabled:opacity-40 disabled:hover:text-muted disabled:hover:bg-transparent"
+              title={groupCallRunning ? "A call is already running — use Join call" : "Group video call"}
+              aria-label="Start group video call"
+            >
+              <Video size={18} />
+            </button>
+          </>
+        )}
+
         {!conversation.isGroup && (
           <>
             <button
@@ -679,6 +620,16 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
             </button>
           </>
         )}
+
+        {/* Phones get "Watch together" from the attach menu; the header stays uncrowded. */}
+        <button
+          onClick={() => openWatch(conversationId, conversation.members)}
+          className="hidden sm:flex w-10 h-10 items-center justify-center flex-shrink-0 rounded-full text-muted hover:text-ember hover:bg-white/5 transition-colors"
+          title="Watch together"
+          aria-label="Watch together"
+        >
+          <MonitorPlay size={18} />
+        </button>
 
         <button
           onClick={() => (showSearch ? closeSearch() : setShowSearch(true))}
@@ -703,6 +654,24 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
           <Info size={18} />
         </button>
       </div>
+
+      {conversation.isGroup && (
+        <div className="relative z-10">
+          <GroupCallBanner conversationId={conversationId} groupName={conversation.name} />
+        </div>
+      )}
+      {watchSession && (
+        <div className="relative z-10 flex items-center gap-3 px-3 sm:px-4 py-2 bg-ember/10 border-b border-ember/20" role="status">
+          <MonitorPlay size={16} className="text-ember flex-shrink-0" />
+          <p className="flex-1 min-w-0 text-sm truncate">Watch party in progress</p>
+          <button
+            onClick={() => openWatch(conversationId, conversation.members)}
+            className="bg-ember text-bg text-sm font-medium rounded-full px-4 min-h-[36px] hover:brightness-110 flex-shrink-0"
+          >
+            Join
+          </button>
+        </div>
+      )}
 
       <AnimatePresence>
         {showSearch && (
@@ -772,13 +741,6 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
         onScroll={handleScroll}
         className="chat-scroll relative z-10 flex-1 min-h-0 overflow-y-auto overflow-x-hidden pt-8 pb-4"
       >
-        {!loading && loadingOlder && (
-          <div className="sticky top-2 z-20 flex justify-center pointer-events-none" aria-live="polite">
-            <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-chat/90 px-3 py-1.5 text-[11px] text-muted shadow-lg backdrop-blur">
-              <Loader2 size={12} className="animate-spin" /> Loading older messages
-            </span>
-          </div>
-        )}
         {loading ? (
           <div className="flex items-center justify-center h-full text-muted text-sm">Loading messages…</div>
         ) : messages.length === 0 ? (
@@ -789,13 +751,6 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
           <AnimatePresence initial={false}>
             {messages.map((m, i) => (
               <React.Fragment key={m._id}>
-                {(i === 0 || dayKey(messages[i - 1].createdAt) !== dayKey(m.createdAt)) && (
-                  <div className="flex items-center justify-center px-4 pt-3 pb-2" role="separator" aria-label={dayLabel(m.createdAt)}>
-                    <span className="text-[11px] text-muted/80 bg-white/5 rounded-full px-2.5 py-0.5">
-                      {dayLabel(m.createdAt)}
-                    </span>
-                  </div>
-                )}
                 {m._id === firstUnreadId && (
                   <div className="flex items-center gap-3 px-6 py-2">
                     <div className="flex-1 h-px bg-ember/30" />
@@ -809,7 +764,6 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
                   isGroup={conversation.isGroup}
                   currentUserId={user.id}
                   memberCount={conversation.members.length}
-                  memberNames={memberNames}
                   showSender={conversation.isGroup && (i === 0 || (messages[i - 1].sender?._id || messages[i - 1].sender) !== (m.sender?._id || m.sender))}
                   highlighted={highlightedId === m._id}
                   highlightTerm={showSearch ? searchQuery.trim() : ""}
@@ -825,6 +779,10 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
                   onUnpin={handleUnpin}
                   onShowInfo={(msg) => setInfoMessage(msg)}
                   onJumpToMessage={jumpToMessage}
+                  onStar={handleStar}
+                  onForward={onForward}
+                  members={conversation.members}
+                  isAdmin={isGroupAdmin}
                 />
               </React.Fragment>
             ))}
@@ -835,22 +793,26 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
       </div>
 
       <AnimatePresence>
-        {!atBottom && (
+        {!atBottom && newMessageCount > 0 && (
           <motion.button
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 12 }}
             onClick={scrollToBottom}
-            aria-label="Scroll to latest message"
             className="absolute bottom-28 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 bg-ember text-bg text-xs font-medium px-4 py-2 rounded-full shadow-lg"
           >
-            <ArrowDown size={14} />{" "}
-            {newMessageCount > 0 ? `${newMessageCount} new message${newMessageCount > 1 ? "s" : ""}` : "Jump to latest"}
+            <ArrowDown size={14} /> {newMessageCount} New Message{newMessageCount > 1 ? "s" : ""}
           </motion.button>
         )}
       </AnimatePresence>
 
       <div className="relative z-10">
+        {toast && (
+          <div role="status" className="mx-3 mb-1 flex items-center gap-2 bg-white/5 border border-white/10 text-xs rounded-lg px-3 py-2">
+            <span className="flex-1 min-w-0">{toast}</span>
+            <button onClick={() => setToast("")} aria-label="Dismiss" className="flex-shrink-0 p-1"><X size={12} /></button>
+          </div>
+        )}
         {sendError && (
           <div role="alert" className="mx-3 mb-1 flex items-center gap-2 bg-red-500/10 border border-red-500/20 text-red-300 text-xs rounded-lg px-3 py-2">
             <span className="flex-1 min-w-0">{sendError}</span>
@@ -863,6 +825,9 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
           onTyping={handleTyping}
           replyTo={replyTo}
           onCancelReply={() => setReplyTo(null)}
+          isGroup={conversation.isGroup}
+          members={conversation.members}
+          currentUserId={user.id}
           disabled={isBlocked}
           disabledReason={isBlocked ? "You've blocked this contact. Unblock them from chat info to send messages." : ""}
         />

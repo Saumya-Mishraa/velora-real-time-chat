@@ -145,6 +145,38 @@ export const clearChat = async (req, res) => {
   }
 };
 
+// "Delete chat": removes the conversation from THIS user's account only.
+// Every message is hidden for them (same mechanism as clearChat), the chat
+// drops out of their list, and the other members keep everything and are
+// not notified. If someone sends a new message later, the chat reappears
+// with only the new messages.
+export const deleteConversation = async (req, res) => {
+  try {
+    const conversation = await Conversation.findById(req.params.id);
+    if (!conversation || !isMember(conversation, req.user._id)) {
+      return res.status(403).json({ message: "Not a member of this conversation." });
+    }
+    await Message.updateMany(
+      { conversation: conversation._id, deletedFor: { $ne: req.user._id } },
+      { $addToSet: { deletedFor: req.user._id } }
+    );
+    const entry = getOrCreateSettings(conversation, req.user._id);
+    entry.deletedAt = new Date();
+    entry.pinned = false;
+    entry.pinnedAt = undefined;
+    entry.archived = false;
+    await conversation.save();
+
+    // Remove it from this person's other tabs/devices too.
+    emitToUser(req.app.get("io"), req.user._id, "conversation:deleted", {
+      conversationId: String(conversation._id),
+    });
+    res.json({ message: "Chat deleted.", conversationId: conversation._id });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to delete chat.", error: err.message });
+  }
+};
+
 export const blockUser = async (req, res) => {
   try {
     const targetId = req.params.userId;
