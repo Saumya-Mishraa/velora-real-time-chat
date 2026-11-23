@@ -39,7 +39,7 @@ const BOTTOM_THRESHOLD = 120;
 
 const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, onConversationUpdate, onOpenMoment, loadingConversation, onForward, jumpToId, onJumpHandled }) => {
   const { user } = useAuth();
-  const { socket, connectionState } = useSocket();
+  const { socket, connectionState, connectionError } = useSocket();
   const { startCall, callState } = useCall();
   const { startGroupCall, inGroupCall, activeCalls } = useGroupCall();
   const { sessions: watchSessions, openWatch, refreshSession } = useWatchTogether();
@@ -62,6 +62,7 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
   const [searchResults, setSearchResults] = useState([]);
   const [searchIndex, setSearchIndex] = useState(0);
   const [sendError, setSendError] = useState("");
+  const pendingSendsRef = useRef([]);
   const [toast, setToast] = useState("");
   const [searching, setSearching] = useState(false);
   const [searchDone, setSearchDone] = useState(false);
@@ -97,6 +98,21 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
       return Array.from(map.values()).sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
     });
   }, []);
+
+  // Flush messages queued while the socket was down (drop ones older than 60s).
+  useEffect(() => {
+    if (connectionState !== "connected" || !socket?.connected) return;
+    const queued = pendingSendsRef.current.splice(0);
+    if (!queued.length) return;
+    const fresh = queued.filter((q) => Date.now() - q.at < 60000);
+    fresh.forEach((q) =>
+      socket.emit("message:send", q.full, (res) => {
+        if (res?.error) setSendError(res.error);
+        else if (res?.message) mergeMessages([res.message]);
+      })
+    );
+    setSendError(fresh.length < queued.length ? "Some messages were too old and weren't sent." : "");
+  }, [connectionState, socket, mergeMessages]);
 
   const joinRoom = useCallback(() => {
     if (!socket || !conversationId) return;
@@ -481,12 +497,26 @@ const ChatWindow = ({ conversation, onlineUserIds, onBack, onOpenGroupDetails, o
   const isOnline = other && onlineUserIds.has(String(other.id || other._id));
   const typingNames = Array.from(typingUsers.values());
 
+  // Sends right away when connected. If the socket is still (re)connecting —
+  // e.g. just after login, or while a sleeping Render backend wakes up — the
+  // message is queued and flushed automatically on connect instead of failing.
   const send = (payload) => {
-    if (!socket?.connected) {
+    const full = { conversationId: conversation._id, ...payload };
+    if (!socket) {
       setSendError("You're offline. Reconnecting — try again in a moment.");
       return false;
     }
-    socket.emit("message:send", { conversationId: conversation._id, ...payload }, (res) => {
+    if (!socket.connected) {
+      socket.connect(); // no-op if already trying
+      pendingSendsRef.current.push({ full, at: Date.now() });
+      setSendError(
+        connectionError
+          ? `Can't reach the server (${connectionError}). Your message will send once it reconnects.`
+          : "Reconnecting… your message will send automatically."
+      );
+      return true;
+    }
+    socket.emit("message:send", full, (res) => {
       if (res?.error) setSendError(res.error);
       else if (res?.message) mergeMessages([res.message]);
     });

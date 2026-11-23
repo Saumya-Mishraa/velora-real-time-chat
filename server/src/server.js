@@ -44,9 +44,15 @@ const allowedOrigins = [
   "http://localhost:5173",
   "https://nuvora-client.onrender.com",
 ];
-if (process.env.CLIENT_URL && !allowedOrigins.includes(process.env.CLIENT_URL)) {
-  allowedOrigins.push(process.env.CLIENT_URL);
-}
+// CLIENT_URL may hold several comma-separated origins
+// (e.g. "https://my-app.vercel.app,https://my-app.onrender.com").
+(process.env.CLIENT_URL || "")
+  .split(",")
+  .map((u) => u.trim().replace(/\/+$/, ""))
+  .filter(Boolean)
+  .forEach((u) => {
+    if (!allowedOrigins.includes(u)) allowedOrigins.push(u);
+  });
 
 // CORS configuration
 const corsOptions = {

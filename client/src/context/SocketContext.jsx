@@ -13,6 +13,7 @@ export const SocketProvider = ({ children }) => {
   // unrelated re-render, which is how listeners were being attached late.
   const [socket, setSocket] = useState(null);
   const [connectionState, setConnectionState] = useState("offline");
+  const [connectionError, setConnectionError] = useState("");
 
   useEffect(() => {
     if (!token || !user) {
@@ -20,6 +21,7 @@ export const SocketProvider = ({ children }) => {
       socketRef.current = null;
       setSocket(null);
       setConnectionState("offline");
+      setConnectionError("");
       return;
     }
 
@@ -34,9 +36,14 @@ export const SocketProvider = ({ children }) => {
     // same origin (so Vite's proxy handles it) and everything else falls
     // back to the existing deployed URL, so production behavior is
     // unchanged by default.
+    // Fallback order: explicit VITE_SOCKET_URL -> same origin in dev (Vite
+    // proxy) -> the host of VITE_API_URL (so the socket always talks to the
+    // SAME backend that handled the login; a mismatched backend rejects the
+    // JWT and the app sits "offline" forever) -> legacy hardcoded URL.
+    const apiHost = (import.meta.env.VITE_API_URL || "").replace(/\/api\/?$/, "");
     const SOCKET_URL =
       import.meta.env.VITE_SOCKET_URL ||
-      (import.meta.env.DEV ? "/" : "https://nuvora-5171.onrender.com");
+      (import.meta.env.DEV ? "/" : apiHost || "https://nuvora-5171.onrender.com");
 
     const socket = io(SOCKET_URL, {
       auth: { token },
@@ -48,10 +55,14 @@ export const SocketProvider = ({ children }) => {
       reconnectionDelayMax: 5000,
     });
 
-    socket.on("connect", () => setConnectionState("connected"));
+    socket.on("connect", () => {
+      setConnectionError("");
+      setConnectionState("connected");
+    });
     socket.on("disconnect", () => setConnectionState("connecting"));
     socket.on("connect_error", (error) => {
-      console.error("Socket connection error:", error);
+      console.error("Socket connection error:", SOCKET_URL, error);
+      setConnectionError(error?.message || "Connection failed");
       setConnectionState("connecting");
     });
 
@@ -72,7 +83,7 @@ export const SocketProvider = ({ children }) => {
   }, [token, user?.id]);
 
   return (
-    <SocketContext.Provider value={{ socket, connectionState }}>
+    <SocketContext.Provider value={{ socket, connectionState, connectionError }}>
       {children}
     </SocketContext.Provider>
   );
